@@ -3,8 +3,8 @@
  * the editor page via Asc.plugin.callCommand, plus `run`, the one way the
  * plugin frame dispatches them.
  *
- * Same discipline as the latex-math plugin (see
- * /home/zhangdm/Projects/onlyoffice-latex-math/plugin/scripts/commands.js):
+ * Same discipline as the latex-math plugin (the seam's reference sample):
+ * https://github.com/ZhangDM-520/onlyoffice-latex-math/blob/master/plugin/scripts/commands.js
  *   - callCommand stringifies the function -> commands cannot close over anything;
  *     makeCommand composes self-contained bodies from a shared PRELUDE
  *   - every command returns a JSON string ({ok:true,...} | {ok:false,error})
@@ -16,24 +16,21 @@
  *   wrapFields                 {tokens}  -> {ok, wrapped:[{name,count}], errors:[]}
  *       Scans paragraphs for {{Name}} tokens; splits runs at token boundaries
  *       and wraps each token run in a real MERGEFIELD displayed as «Name»
- *       (mirrors ApiParagraph/ApiRun.WrapInMailMergeField; see SDK
- *       ParaField(AscWord.fieldtype_MERGEFIELD, [name]) construction).
+ *       (engine semantics: docs/MEMORY.md fact 1).
  *   loadMergeData              {data}    -> {ok, count}
- *       Api.LoadMailMergeData(data); data[0] = field names.
+ *       Api.LoadMailMergeData(data); grid shape: dataparse.js header.
  *   getMergeCount              {}        -> {ok, count}   (Api.GetMailMergeReceptionsCount)
  *   snapshotTemplate           {}        -> {ok}
  *       Api.GetMailMergeTemplateDocContent() kept on the editor-page side
- *       (attach to the resolved Api object; complex objects cannot cross
- *       the callCommand boundary).
+ *       (why: docs/MEMORY.md fact 4).
  *   mergeRange                 {start,end} -> {ok}
- *       Api.MailMerge(start,end) — replaces the open document with merged output.
+ *       Api.MailMerge(start,end) — semantics: docs/MEMORY.md fact 1.
  *   restoreTemplate            {}        -> {ok}
  *       Api.ReplaceDocumentContent(snapshot).
  *   replacePlain               {plan}    -> {ok, replaced, errors}
  *       Sequential SearchAndReplace over [{searchString,replaceString,matchCase}];
- *       `replaced` counts OCCURRENCES (the engine replaces all matches per call);
- *       `errors` lists entries skipped (e.g. 'unsafe-value' for data containing
- *       the caret-marker). Replacement values are caret-safe (see body).
+ *       `replaced` counts OCCURRENCES; `errors` lists entries skipped (e.g.
+ *       'unsafe-value'). Caret semantics: docs/MEMORY.md fact 9.
  *
  * Dispatch contract: `run(name, payload, callback)` - the callback receives
  * exactly one argument, the parsed result shaped {ok:true,...} | {ok:false,error}.
@@ -527,12 +524,10 @@
 		"if (!target) return JSON.stringify({ ok: false, error: 'replace-unavailable' });",
 		"var plan = S.plan;",
 		"if (!plan || typeof plan.length !== 'number') return JSON.stringify({ ok: false, error: 'no-plan' });",
-		// CSearchPatternEngine interprets ^t/^p/^l/^n/^m/^~ in replacement
-		// strings (inserting field codes) and offers no escape - but a lone
-		// trailing '^' inserts a literal caret. So every caret in the data
-		// travels as a private-use marker and is demoted back in one final
-		// pass: a value like "a^p" survives as text instead of a paragraph
-		// mark. A value that already carries the marker is refused outright.
+		// Why the marker: CSearchPatternEngine offers no `^^` escape, so a
+		// caret in the data cannot survive SearchAndReplace as itself; it
+		// travels as the marker and is demoted in one final pass. Semantics:
+		// docs/MEMORY.md fact 9; decision: docs/adr/0001.
 		"var CARET_MARKER = '\\uE0FF';",
 		"function demoteCarets() {",
 		"	try { target.SearchAndReplace({ searchString: CARET_MARKER, replaceString: '^', matchCase: true }); } catch (e) { /* leave markers rather than throw */ }",

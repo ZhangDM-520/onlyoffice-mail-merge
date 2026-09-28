@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Generate the plugin icon set from noctalia's shipped Tabler font.
 
-Adapted from /home/zhangdm/Projects/onlyoffice-latex-math/tools/make-icons.py for
+Adapted from https://github.com/ZhangDM-520/onlyoffice-latex-math/blob/master/tools/make-icons.py for
 the Mail Merge plugin: one "mail-fast" logo glyph on the store-blue tile, at
 every scale ONLYOFFICE asks for. No ribbon/menu slots - this plugin is a window
 variation with no toolbar entries.

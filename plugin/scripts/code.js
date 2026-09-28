@@ -13,7 +13,7 @@
  *                   range ("1-10,15") and the output format (docx/pdf)
  *
  * Architecture (composition root - no UMD here, that is what the modules do):
- *   dataparse.js   String in -> String[][] (row 0 = headers)
+ *   dataparse.js   String in -> String[][] (grid shape: its header)
  *   fieldmap.js    token scanning / matching / plain-replace plans (pure)
  *   commands.js    the `run` seam into the editor page (callCommand bodies)
  *   this file      wizard state, DOM, and the merge pipeline's sequencing
@@ -30,12 +30,10 @@
  * There is no create-new-document API, so per-record output mutates the open
  * document record by record and restores the snapshot after every save. Errors
  * surface in the status area and the window is NEVER closed on error; Cancel
- * (button id 0) and the X (id -1) close via CloseWindow once the pipeline has
- * unwound. The window id arrives WITH the button click (the host shim dispatches
- * `Asc.plugin.button(k, g.buttonWindowId)`), so the hint is the first close
- * target; the page URL (`?windowID=...`) and `Asc.plugin.windowID` exist only
- * for secondary windows created via ShowWindow and are the fallbacks for
- * hint-less callers.
+ * (button id 0) and the X (id -1) close the window once the pipeline has
+ * unwound. Close semantics: docs/MEMORY.md fact 8 (the main window gets no
+ * windowId with its clicks); the id resolution order implemented below is
+ * documented at closeWindow.
  */
 (function (window, document) {
 	"use strict";
@@ -376,7 +374,7 @@
 
 	/**
 	 * The pipeline. `options`:
-	 *   data            String[][] (row 0 = headers)
+	 *   data            String[][] (grid shape: dataparse.js header)
 	 *   paragraphs      template paragraphs (the plain plan's text)
 	 *   matched         [{token, header}] from FieldMap.matchFields
 	 *   unmatched       [token]
@@ -691,21 +689,15 @@
 		return id !== undefined ? id : sdkWindowId();
 	}
 
-	// Close resolution order: the hint that arrived with the button click (the
-	// shim dispatches `Asc.plugin.button(k, g.buttonWindowId)` - the window id
-	// is the SECOND argument, and for a main window-type variation it is the
-	// only id there is), then the URL, then the SDK value, then a bare call.
-	// A throw from any executeMethod walks the chain on; when nothing gets
-	// through, the shim's own default close (`executeCommand("close", "")`) is
-	// the final fallback.
+	// Close resolution order: the hint argument (an id the shim dispatches as
+	// `Asc.plugin.button(k, g.buttonWindowId)` — secondary windows only), then
+	// the URL `?windowID=`, then `Asc.plugin.windowID`, then a bare call.
+	// Host close semantics: docs/MEMORY.md fact 8. executeCommand("close") runs
+	// last and unconditional because it is the only channel that tears the main
+	// window down (CloseWindow covers ShowWindow-registered windows only and
+	// no-ops for everyone else), and it is harmless in window frames where it
+	// is disabled.
 	function closeWindow(hintId) {
-		// The host only closes plugin windows registered via ShowWindow:
-		// CloseWindow silently ignores everything else - including the MAIN
-		// window-type variation and empty arguments (verified in the 9.4.0
-		// host audit: pluginMethod_CloseWindow no-ops on unknown frame ids).
-		// executeCommand("close") is the one channel that tears the main
-		// window down, so it always runs last; in window frames it is
-		// disabled, which makes the call harmless there.
 		var ids = [hintId, queryWindowId(), sdkWindowId()];
 		var attempted = false;
 		for (var i = 0; i < ids.length; i++) {

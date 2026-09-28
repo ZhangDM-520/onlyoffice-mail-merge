@@ -1,94 +1,45 @@
 # Session notes — mail merge plugin (2026-09-28)
 
-## Why this repo exists
-
-Goal: mail merge in ONLYOFFICE Desktop Editors (template + recipient spreadsheet ->
-personalized documents). Verdict from research:
-
-- Desktop Editors has NO built-in mail merge ("available in the online version only";
-  DesktopEditors#733 open since 2021, internal tracker 54752, no ETA).
-- NO marketplace/catalog plugin does it (55 catalog plugins checked; nearest is *Curly*,
-  form-based `{tags}` fill; *Send* emails the current doc via the desktop mail client).
-- BUT the merge ENGINE ships in every build's public plugin API.
+Durable facts: `docs/MEMORY.md`. User contract: `README.md`. This file keeps dated
+findings, decisions and post-mortems only (map: README.md "Docs map").
 
 ## SDK engine evidence (verified on host, onlyoffice-git 9.4.0.130)
 
-`/opt/onlyoffice/desktopeditors/editors/sdkjs/word/sdk-all.js`, JSDoc `@typeofeditors ["CDE"]`:
+Behaviour mined to `docs/MEMORY.md` facts 1-2. Re-check: grep `Api.MailMerge` in
+`/opt/onlyoffice/desktopeditors/editors/sdkjs/word/sdk-all.js` (JSDoc
+`@typeofeditors ["CDE"]`).
 
-| Method | Behaviour |
-| :--- | :--- |
-| `Api.LoadMailMergeData(String[][])` | row 0 = field names, rows 1..n = values -> `editor.asc_StartMailMergeByList(data)` |
-| `Api.GetMailMergeReceptionsCount()` | record count |
-| `Api.GetMailMergeTemplateDocContent()` | ApiDocumentContent snapshot (complex; cannot cross callCommand) |
-| `Api.MailMerge(start, end)` | `Get_MailMergedDocument(start,end)` then `ReplaceDocumentContent` — replaces the OPEN body with merged output for the record range |
-| `Api.ReplaceDocumentContent(content)` | replaces body from a snapshot |
-| `ApiParagraph/ApiRun.WrapInMailMergeField()` | wraps text into `ParaField(AscWord.fieldtype_MERGEFIELD, [name])` with «» display |
+## Host install findings (2026-09-28)
 
-Desktop UI (web-apps) exposes none of it — no Mailings tab, nothing in locales. The
-100-recipient cap is the online UI's, not the engine's.
-
-## Plugin API facts used (api.onlyoffice.com/docs/plugins)
-
-- `Asc.plugin.callCommand(func, isClose, isCalc, cb)` — functions are stringified and lose
-  closures; `Asc.scope` is the single payload slot; returns must be JSON-serializable.
-  Since 7.1 `window`/`document`/`alert` are blocked inside callCommand code.
-- Variation `type: "window"` + `size` + `buttons`; `Asc.plugin.button(id, windowId)`
-  mandatory for close (-1 = close/x); `CloseWindow`/`ResizeWindow` via `executeMethod`.
-- `<input type=file>` + FileReader work in the iframe (OCR/Clipdrop plugins prove it);
-  heavy vendored libs fine (Tesseract, highlight.js precedent).
-- `Asc.plugin.executeMethod("GetFileToDownload", ["docx"], cb)` — on desktop the OS save
-  dialog opens per call. NO create-new-document API exists (Document-API method list);
-  per-record output therefore = merge -> save -> `ReplaceDocumentContent(snapshot)` -> next.
-
-## Pitfalls carried over from onlyoffice-latex-math
-
-- Install dir must be the braced GUID (`asc.` prefix only in config.json); `cp -a plugin/.`,
-  delete dest on upgrade; clear editor `data/cache/{Cache,Code Cache}` after replacing files.
-- **Per-user plugin roots need a real `v1/` loader sibling.** Frames resolve
-  `../v1/plugins.js` relative to their own sdkjs-plugins root; this host's per-user root
-  shipped 3 zero-byte stubs (`plugins.js`, `plugins-ui.js`, `plugins.css`), so a
-  per-user-only plugin enumerates (inotify-proven) but `window.Asc.plugin` is undefined and
-  the UI is silently inert. latex-math escaped this only because its `/opt` copy shadows the
-  user copy. Fixed 2026-09-28 by copying the `/opt` v1 trio into the user root; also install
-  system-wide to match bundled plugins.
-- One callCommand in flight (shared Asc.scope swaps payloads); serialize the queue.
-- Return JSON strings only — `Asc.checkReturnCommand` drops complex objects.
+- This host's per-user sdkjs-plugins root shipped 3 zero-byte `v1/` stubs
+  (`plugins.js`, `plugins-ui.js`, `plugins.css`): a per-user-only plugin enumerates
+  (inotify-proven) but `Asc.plugin` is undefined and the UI is silently inert.
+  latex-math escaped this only because its `/opt` copy shadows the user copy. Fixed
+  2026-09-28 by copying the `/opt` v1 trio into the user root. Policy home:
+  latex-math README § Install (`docs/MEMORY.md` fact 3).
 - Batch document edits into one history point (`CreateNewHistoryPoint`) per merge.
 
 ## Search-and-replace semantics (learned from sdk-all.js, 2026-09-28)
 
-- `ApiDocument.SearchAndReplace` replaces **ALL** occurrences per call (`bAll=true`).
-- Its replacement string runs through `CSearchPatternEngine.Set`: `^t ^l ^p ^n ^m ^~ ^? ^# ^$`
-  become field codes and there is **no** `^^` escape; a lone trailing `^` is the only way to
-  insert a literal caret. Our `replacePlain` therefore routes value carets through a
-  private-use marker (`\uE0FF`) and demotes them in one final pass; values already
-  containing the marker are refused (`unsafe-value`).
-- callCommand globals (`window`/`document`/`alert`) are **shadow-stubbed** by
-  `safePluginEval` (bound as no-op params), not deleted or throwing.
+- Caret-marker scheme and `unsafe-value` refusal: `docs/MEMORY.md` fact 9;
+  decision: `docs/adr/0001`.
 
-## Decisions
+## Decisions (2026-09-28)
 
-- Both placeholder styles: wrap `{{Name}}` (and bare selection) into real MERGEFIELD,
-  plain `SearchAndReplace` fallback for unmatched tokens.
-- Both outputs; default single combined document (per-record = N save dialogs).
+- Caret-safe plain replacement: `docs/adr/0001`.
+- Both placeholder styles (wrap matched, plain-replace unmatched) + combined default:
+  `docs/adr/0002`.
+- Per-record output mutates the open document: `docs/adr/0003`.
 - CSV + XLSX + JSON data sources, parsed in-iframe (PapaParse / SheetJS vendored).
 - Out of scope: email output, marketplace packaging, Document Builder batch mode.
 
 ## Wizard UI (code.js / styles.css / icons) — 2026-09-28
 
-- `plugin/scripts/code.js` is the composition root: 3-step wizard in `#mm-app`, sequential
-  `run()` pipeline (loadMergeData -> wrapFields(matched) -> snapshotTemplate -> mergeRange ->
-  replacePlain -> GetFileToDownload; per-record loops merge(i,i) -> save -> restoreTemplate).
-  Cancel/X = button ids 0/-1 -> `CloseWindow` with the `?windowID=` URL param (SDK publishes
-  `Asc.plugin.windowID` late, from an XHR callback); the window closes only after a successful run.
-- Known limitation: plain-replace values cannot vary across copies of a *combined* document
-  (`MailMerge` replicates the open body), so combined + wrap-off blanks matched tokens - the
-  Output step warns and points to per-record mode. Gapped ranges ("1,3") are refused in combined
-  mode (one `MailMerge(start,end)` span must be contiguous).
-- Icons: `tools/make-icons.py` renders Tabler `mail-fast` (noctalia font, U+F069) on the #2A5DB0
-  store tile at 5 scales x (light|dark) + store set; `--check` = "16 files ok".
-- Tests: `tests/code.test.js` (fake DOM + fake contract seams, 23 tests) and
-  `tests/icons.test.js` (PNG pixel checks, 4 tests); `node --test tests/` green.
+- `plugin/scripts/code.js` is the composition root: 3-step wizard in `#mm-app`,
+  sequential `run()` pipeline (sequence: its header).
+- Close semantics: `docs/MEMORY.md` fact 8.
+- Combined-mode plain-replacement limitation found here (plain tokens come out blank):
+  README.md "Limitations".
 
 ## Empty plugin window regression — 2026-09-28, second session
 
@@ -102,7 +53,7 @@ Desktop UI (web-apps) exposes none of it — no Mailings tab, nothing in locales
   wired. The existing tests masked it — their harness mounted into a pre-built root.
 - Fix: boot on DOM-ready (`whenDocumentReady` + mount-once guard + late-Asc retry
   polling), double-install-safe host hooks, hardened `closeWindow` fallback walk
-  (URL `?windowID=` -> `Asc.plugin.windowID` -> bare `executeMethod("CloseWindow", [])`).
+  (resolution order: `closeWindow` comment in code.js).
 - Test evidence: `tests/code.test.js` regressions (real head-before-body load order,
   already-parsed document, late Asc, close fallback walk) — 3 of 4 red on old code;
   `tests/host-integration.test.js` runs the real script chain incl. the `/opt` `v1/plugins.js`
@@ -111,3 +62,17 @@ Desktop UI (web-apps) exposes none of it — no Mailings tab, nothing in locales
   `Asc.plugin.windowID` only late, via its `window.onload` config.json XHR callback;
   `executeMethod` routes per-window only once `windowID` is set — hence the URL-param
   first branch in `closeWindow`.
+
+## Docs restructure — 2026-09-28, third session
+
+- The doc set carried a live contradiction on close semantics (four homes, four stories)
+  and facts restated 2-5x across README/MEMORY/NOTE/code headers; the journal also held
+  stale test/icon counts. Restructured to one fact one home: durable
+  facts in `docs/MEMORY.md` (facts 8-10 added/rewritten), user contract in `README.md`
+  ("Limitations"), module contracts in script headers, decisions in `docs/adr/0001-0003`,
+  vocabulary in `CONTEXT.md`, and the docs map + check commands in README. Counts live
+  nowhere — the check runners live in README.md "Docs map".
+- Pitfall: a documented `sed` range check whose pattern text appears in its own command
+  re-opens its range and leaks the whole tail of the file into the "extract" (the check
+  matches its own pointer text). The recipes-sync check in README therefore spells its
+  patterns `<![-]-` — a character-class trick so the pattern cannot match its own text.

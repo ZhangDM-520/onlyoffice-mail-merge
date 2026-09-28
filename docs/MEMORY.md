@@ -11,14 +11,11 @@
 2. **No plugin API creates or opens a new document.** Per-record file output must loop:
    merge(i,i) -> `GetFileToDownload` (desktop opens an OS save dialog per call) ->
    restore template snapshot -> next.
-3. Plugin install: system `editors/sdkjs-plugins/` + user
-   `~/.local/share/onlyoffice/desktopeditors/sdkjs-plugins/`, merged by GUID+version;
-   directory name = braced GUID; `config.json` guid = `asc.{GUID}`. Upgrade = remove dest
-   first (`cp -a` only adds). Clear `data/cache/{Cache,Code Cache}` after file replacement.
-   **Per-user root must have a real `v1/` loader sibling** — frames resolve `../v1/plugins.js`
-   from their own root; this host's user root had zero-byte stubs (plugins enumerate but
-   `Asc.plugin` is undefined → silently inert UI). Keep the `/opt` v1 trio copied into the
-   user root, or install plugins system-wide.
+3. **Plugin install policy has one home:** the latex-math README § Install
+   (https://github.com/ZhangDM-520/onlyoffice-latex-math#install) — both roots, braced-GUID
+   directory, delete-dest upgrade, cache clear, and the real-`v1/`-loader rule. This
+   plugin's GUID recipe: README.md "Install". Manifest truth (`asc.{GUID}`):
+   `plugin/config.json`. Host evidence (this machine, `v1/` stubs): docs/NOTE.md.
 4. `callCommand` bodies are stringified (no closures); `Asc.scope` is one shared slot
    (serialize dispatch); returns must be JSON strings; `window`/`document`/`alert` are
    blocked inside callCommand since 7.1.
@@ -35,17 +32,32 @@
    (`~/Projects/onlyoffice-latex-math`, GUID `{5B4C1A72-...}`) is the reference sample for
    manifest layout, callCommand seam, icon slots (5 scales x 2 themes, no fallback) and
    test harness (`node --test`, fake-editor double).
-8. **Closing a plugin window (verified in the 9.4.0 host, 2026-09-28).**
-   `executeMethod("CloseWindow", [id])` only closes windows registered via `ShowWindow` —
-   it silently no-ops on any other id (including `[]`/undefined) and never throws. The MAIN
+8. **Closing a plugin window (verified in the 9.4.0 host, 2026-09-28).** The MAIN
    window-type variation gets NO windowId with its clicks (web-apps calls
-   `asc_pluginButtonClick(id, guid)` 2-arg), so the ONLY working close is
+   `asc_pluginButtonClick(id, guid)` 2-arg). `executeMethod("CloseWindow", [id])` only
+   closes windows registered via `ShowWindow` — it silently no-ops on any other id
+   (including `[]`/undefined) and never throws, so never treat a "successful" call as
+   evidence the window closed. The ONLY working close for the main window is
    `Asc.plugin.executeCommand("close", "")`. The window X/ESC routes to
    `Asc.plugin.button(-1, …)`; once the plugin defines that hook, the host never
-   auto-closes. Never treat a "successful" `CloseWindow` as evidence the window closed.
+   auto-closes. Check: grep `pluginMethod_CloseWindow` / `asc_pluginButtonClick` in the
+   host's `editors/sdkjs/word/sdk-all.js` + web-apps shim (audit 9.4.0, 2026-09-28);
+   `node --test tests/code.test.js` `close:` cases pin the fallback chain. The id
+   resolution order this plugin walks: `plugin/scripts/code.js` `closeWindow` comment.
+9. **`SearchAndReplace` caret semantics (learned from sdk-all.js, 2026-09-28).** The
+   replacement string runs through `CSearchPatternEngine.Set`: `^t ^l ^p ^n ^m ^~ ^?
+   ^# ^$` become field codes and there is NO `^^` escape (a lone trailing `^` is the
+   only literal caret); one call replaces ALL occurrences. Plain-replace values
+   therefore route carets through a private-use marker (`\uE0FF`) demoted in one final
+   pass, and values already containing the marker are refused (`unsafe-value`).
+   Decision rationale: docs/adr/0001.
+10. **Iframe file input works in plugin windows** — `<input type=file>` + FileReader
+   (OCR/Clipdrop plugins prove it) and heavy vendored libraries are fine (Tesseract,
+   highlight.js precedent); the vendored PapaParse/SheetJS choice rests on this
+   (api.onlyoffice.com/docs/plugins, checked 2026-09-28).
 
 ## Rejected approaches
 
-- Driving the online-only Mail Merge UI from desktop — no UI exists to drive.
-- Waiting for upstream: DesktopEditors#733 / tracker 54752 open since 2021, no ETA.
-- Existing marketplace plugin: none (checked catalog repo + marketplace A-Z, 2026-09).
+The verdict table (no desktop mail-merge UI, no marketplace plugin, engine ships in
+every build) has one home: README.md "Why a plugin". Evidence dates: catalog repo +
+marketplace A-Z checked 2026-09; upstream issues re-checked 2026-09-28.

@@ -19,16 +19,15 @@ ONLYOFFICE has mail merge, but not where it is needed:
 | Merge engine (`Api.LoadMailMergeData`, `Api.MailMerge`, `WrapInMailMergeField`) | **in every build**, including Desktop — just unreachable from the UI |
 | One output file per recipient | even the online product lacks it ([DocumentServer#2218](https://github.com/ONLYOFFICE/DocumentServer/issues/2218)) |
 
-The plugin is the thin layer that exposes the engine already shipped in
-`editors/sdkjs/word/sdk-all.js`: parse the data source in the iframe, load it with
-`Api.LoadMailMergeData`, and drive `Api.MailMerge` record by record.
+The plugin is the thin layer that exposes that engine already shipped in
+`editors/sdkjs/word/sdk-all.js` (behaviour: `docs/MEMORY.md` facts 1-2).
 
 ## Usage
 
 1. Open a template document containing `{{Name}}`, `{{City}}` … tokens (or select text and
    let the plugin wrap it).
 2. Plugins tab → **Mail Merge** → pick your CSV/XLSX/JSON data source (first row = field
-   names, one row per recipient).
+   names, one row per recipient; shape contract: `plugin/scripts/dataparse.js`).
 3. Review the field mapping (matched tokens become real «Name» merge fields; unmatched
    tokens fall back to plain text replacement).
 4. Choose output: single combined document (default) or one file per recipient, a record
@@ -37,40 +36,47 @@ The plugin is the thin layer that exposes the engine already shipped in
 Per-recipient mode opens the standard save dialog once per record (there is no
 create-new-document API in the plugin surface) — use the combined mode for large runs.
 
+## Limitations
+
+- Combined output blanks plain-replaced tokens: one combined document holds every
+  record's copy of the template, so a plain replacement cannot vary per recipient.
+  With wrapping off that includes matched tokens. The Output step warns; wrap the
+  tokens or use one file per recipient.
+- Gapped record ranges ("1,3") are refused in combined mode — one merge span must be
+  contiguous.
+- The 100-recipient cap belongs to the online mail-merge UI; the engine has none.
+
 ## Install
 
-The plugin GUID is `{2A0D08A5-D356-4057-A366-8A2AA579B4D7}`. **Keep the braces** — the
-directory the app enumerates is the braced one.
+The plugin GUID is `{2A0D08A5-D356-4057-A366-8A2AA579B4D7}`.
 
+<!-- install-recipe:start -->
 ```bash
 G='{2A0D08A5-D356-4057-A366-8A2AA579B4D7}'
 
-# per-user (merged with the system root by GUID + version)
+# system-wide (needs root)
+sudo rm -rf "/opt/onlyoffice/desktopeditors/editors/sdkjs-plugins/$G"
+sudo cp -a plugin/. "/opt/onlyoffice/desktopeditors/editors/sdkjs-plugins/$G/"
+
+# per-user
 rm -rf "$HOME/.local/share/onlyoffice/desktopeditors/sdkjs-plugins/$G"
 cp -a plugin/. "$HOME/.local/share/onlyoffice/desktopeditors/sdkjs-plugins/$G/"
 
-# or system-wide (needs root)
-sudo rm -rf "/opt/onlyoffice/desktopeditors/editors/sdkjs-plugins/$G"
-sudo cp -a plugin/. "/opt/onlyoffice/desktopeditors/editors/sdkjs-plugins/$G/"
-```
-
-`cp -a plugin/. <dest>` — *not* `cp -r plugin <dest>`. Remove the destination first on
-upgrade (`rsync -a --delete plugin/ <dest>/` also works). After replacing files, quit the
-editor and clear its renderer cache:
-
-```bash
+# after replacing files: quit the editor, then clear its renderer cache
 rm -rf ~/.local/share/onlyoffice/desktopeditors/data/cache/{Cache,Code\ Cache}
 ```
+<!-- install-recipe:end -->
 
-**Per-user installs need a real `v1/` loader.** Plugin frames resolve `../v1/plugins.js`
-against the sdkjs-plugins root *they live in*. On some installs the per-user root
-(`~/.local/share/.../sdkjs-plugins/v1/`) ships only zero-byte stubs, so a per-user-only
-plugin enumerates but its API is dead. Fix it once by copying the real loaders from the
-system root (or install the plugin system-wide like the bundled plugins):
+Host install policy has one home: the
+[latex-math README § Install](https://github.com/ZhangDM-520/onlyoffice-latex-math#install) —
+braced-directory rules, `cp -a` semantics, delete-dest upgrades, the real-`v1/`-loader rule
+and verification. This section is only this plugin's recipe. Check the two recipes stay in
+sync (run from `~/Projects`):
 
 ```bash
-cp -p /opt/onlyoffice/desktopeditors/editors/sdkjs-plugins/v1/{plugins.js,plugins-ui.js,plugins.css} \
-      ~/.local/share/onlyoffice/desktopeditors/sdkjs-plugins/v1/
+# The "<![-]-" spelling keeps the patterns from matching their own text.
+diff <(sed -n '/<![-]- install-recipe/,/<![-]- install-recipe:end -->/p' onlyoffice-latex-math/README.md | sed 's/{5B4C1A72-[^}]*}/{GUID}/g') \
+     <(sed -n '/<![-]- install-recipe/,/<![-]- install-recipe:end -->/p' onlyoffice-mail-merge/README.md | sed 's/{2A0D08A5-[^}]*}/{GUID}/g')
 ```
 
 ## Development
@@ -79,7 +85,7 @@ cp -p /opt/onlyoffice/desktopeditors/editors/sdkjs-plugins/v1/{plugins.js,plugin
 plugin/
   config.json          manifest (window variation, GUID, icons)
   index.html           iframe page: vendor libs + scripts
-  scripts/dataparse.js pure: CSV/XLSX-grid/JSON -> String[][] (row 0 = field names)
+  scripts/dataparse.js pure: CSV/XLSX-grid/JSON -> String[][] (grid shape: its header)
   scripts/fieldmap.js  pure: {{Token}} scanning, header matching, replace plans
   scripts/commands.js  editor-page seam (callCommand bodies + serialized dispatch)
   scripts/code.js      wizard UI + orchestration
@@ -88,10 +94,28 @@ tests/                 node --test suites (pure modules, command seam, icons)
 tools/make-icons.py    generates theme/scale icon PNGs
 ```
 
-Tests: `node --test tests/`. Icons: `python3 tools/make-icons.py --check`.
+Editor-page commands follow one discipline (`docs/MEMORY.md` fact 4), shared with
+[onlyoffice-latex-math](https://github.com/ZhangDM-520/onlyoffice-latex-math).
+SDK mail-merge engine evidence: `docs/MEMORY.md` facts 1-2.
 
-The command seam follows the same discipline as
-[onlyoffice-latex-math](https://github.com/ZhangDM-520/onlyoffice-latex-math): commands are
-stringified into the editor page, return JSON strings only, run one-at-a-time over
-`Asc.scope`, and time out against a 30 s backstop. See `docs/NOTE.md` for the SDK
-mail-merge engine evidence.
+## Docs map
+
+One fact, one home: each fact is stated in exactly one place below; every other mention
+is a pointer. Code comments state *why*, never *what*.
+
+| Home | Owns |
+| :--- | :--- |
+| `CONTEXT.md` | vocabulary — one canonical term per concept |
+| `docs/adr/NNNN-*.md` | one decision each (what was chosen and why) |
+| `docs/MEMORY.md` | durable host/SDK facts + how to re-verify them |
+| `docs/NOTE.md` | session journal — dated findings only |
+| `plugin/scripts/*.js` header | that module's contract |
+| `tests/*.test.js` header | that suite's run line |
+| `plugin/config.json` | manifest truth (GUID, variation, locales) |
+
+How to check:
+
+```bash
+node --test tests/                          # one suite: node --test tests/<name>.test.js
+python3 tools/make-icons.py --check
+```

@@ -1,0 +1,412 @@
+/*
+ * Mail Merge wizard styles.
+ *
+ * Theme handling has three layers, in increasing specificity:
+ *   1. light defaults (matching the host's plugins.css palette)
+ *   2. `@media (prefers-color-scheme: dark)` for a host that never tells us
+ *   3. the ONLYOFFICE theme class the plugin frame sets in onThemeChanged
+ *      (`.theme-dark` / `.theme-type-dark` on <html> or <body>) - when the host
+ *      says dark, dark wins over the media query and vice versa.
+ */
+
+:root {
+	--mm-bg: #ffffff;
+	--mm-bg-alt: #f5f5f5;
+	--mm-fg: #444444;
+	--mm-fg-muted: #7d858c;
+	--mm-border: #cfcfcf;
+	--mm-accent: #2a5db0;
+	--mm-accent-fg: #ffffff;
+	--mm-error: #c0392b;
+	--mm-ok: #2e7d32;
+	--mm-cell: #ffffff;
+}
+
+@media (prefers-color-scheme: dark) {
+	:root {
+		--mm-bg: #2b2b2b;
+		--mm-bg-alt: #333333;
+		--mm-fg: #e8e8e8;
+		--mm-fg-muted: #a0a0a0;
+		--mm-border: #4d4d4d;
+		--mm-accent: #6ea0ef;
+		--mm-accent-fg: #1e1e1e;
+		--mm-error: #ef8a80;
+		--mm-ok: #81c784;
+		--mm-cell: #333333;
+	}
+}
+
+.theme-dark,
+.theme-type-dark,
+body.theme-dark,
+body.theme-type-dark {
+	--mm-bg: #2b2b2b;
+	--mm-bg-alt: #333333;
+	--mm-fg: #e8e8e8;
+	--mm-fg-muted: #a0a0a0;
+	--mm-border: #4d4d4d;
+	--mm-accent: #6ea0ef;
+	--mm-accent-fg: #1e1e1e;
+	--mm-error: #ef8a80;
+	--mm-ok: #81c784;
+	--mm-cell: #333333;
+}
+
+.theme-light,
+.theme-type-light,
+body.theme-light,
+body.theme-type-light {
+	--mm-bg: #ffffff;
+	--mm-bg-alt: #f5f5f5;
+	--mm-fg: #444444;
+	--mm-fg-muted: #7d858c;
+	--mm-border: #cfcfcf;
+	--mm-accent: #2a5db0;
+	--mm-accent-fg: #ffffff;
+	--mm-error: #c0392b;
+	--mm-ok: #2e7d32;
+	--mm-cell: #ffffff;
+}
+
+html,
+body {
+	height: 100%;
+	margin: 0;
+}
+
+body {
+	font-family: "Helvetica Neue", Helvetica, Arial, sans-serif;
+	font-size: 12px;
+	color: var(--mm-fg);
+	background: var(--mm-bg);
+}
+
+#mm-app {
+	height: 100%;
+}
+
+.mm-wrap {
+	display: -webkit-flex;
+	display: flex;
+	-webkit-flex-direction: column;
+	flex-direction: column;
+	height: 100%;
+	box-sizing: border-box;
+	padding: 8px 12px 10px;
+}
+
+/* --- step chips ------------------------------------------------------- */
+
+.mm-steps {
+	display: -webkit-flex;
+	display: flex;
+	-webkit-flex-direction: row;
+	flex-direction: row;
+	list-style: none;
+	margin: 0 0 8px;
+	padding: 0;
+	gap: 6px;
+}
+
+.mm-chip {
+	-webkit-flex: 1;
+	flex: 1;
+	display: -webkit-flex;
+	display: flex;
+	-webkit-align-items: center;
+	align-items: center;
+	gap: 6px;
+	padding: 5px 8px;
+	border: 1px solid var(--mm-border);
+	border-radius: 3px;
+	background: var(--mm-bg-alt);
+	color: var(--mm-fg-muted);
+	cursor: default;
+	user-select: none;
+	overflow: hidden;
+	white-space: nowrap;
+}
+
+.mm-chip-num {
+	display: inline-block;
+	min-width: 16px;
+	height: 16px;
+	line-height: 16px;
+	text-align: center;
+	border-radius: 50%;
+	background: var(--mm-border);
+	color: var(--mm-fg);
+	font-size: 10px;
+}
+
+.mm-chip.mm-active {
+	border-color: var(--mm-accent);
+	color: var(--mm-fg);
+	background: var(--mm-bg);
+}
+
+.mm-chip.mm-active .mm-chip-num,
+.mm-chip.mm-done .mm-chip-num {
+	background: var(--mm-accent);
+	color: var(--mm-accent-fg);
+}
+
+.mm-chip.mm-done {
+	cursor: pointer;
+	color: var(--mm-fg);
+}
+
+/* --- step bodies ------------------------------------------------------ */
+
+.mm-body {
+	-webkit-flex: 1;
+	flex: 1;
+	overflow: auto;
+	border: 1px solid var(--mm-border);
+	border-radius: 3px;
+	background: var(--mm-bg);
+	padding: 10px;
+}
+
+.mm-step {
+	display: none;
+}
+
+.mm-step.mm-current {
+	display: block;
+}
+
+.mm-step h2 {
+	margin: 0 0 8px;
+	font-size: 13px;
+	font-weight: bold;
+}
+
+.mm-row {
+	margin: 0 0 10px;
+}
+
+.mm-hint {
+	color: var(--mm-fg-muted);
+	margin: 4px 0 0;
+	line-height: 1.35;
+}
+
+.mm-note {
+	border-left: 3px solid var(--mm-accent);
+	background: var(--mm-bg-alt);
+	padding: 6px 8px;
+	margin: 8px 0;
+	line-height: 1.35;
+}
+
+.mm-warning {
+	border-left: 3px solid var(--mm-error);
+	background: var(--mm-bg-alt);
+	padding: 6px 8px;
+	margin: 8px 0;
+	line-height: 1.35;
+}
+
+.mm-summary {
+	font-weight: bold;
+	margin: 6px 0;
+}
+
+/* --- tables ----------------------------------------------------------- */
+
+.mm-scroll {
+	max-height: 180px;
+	overflow: auto;
+	border: 1px solid var(--mm-border);
+	border-radius: 2px;
+}
+
+table.mm-table {
+	border-collapse: collapse;
+	width: 100%;
+	background: var(--mm-cell);
+}
+
+.mm-table th,
+.mm-table td {
+	border: 1px solid var(--mm-border);
+	padding: 3px 6px;
+	text-align: left;
+	white-space: nowrap;
+	max-width: 180px;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+.mm-table th {
+	background: var(--mm-bg-alt);
+	font-weight: bold;
+	position: sticky;
+	top: 0;
+}
+
+.mm-table td.mm-token {
+	font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+}
+
+.mm-badge {
+	display: inline-block;
+	padding: 1px 6px;
+	border-radius: 8px;
+	font-size: 10px;
+	background: var(--mm-bg-alt);
+	border: 1px solid var(--mm-border);
+	color: var(--mm-fg-muted);
+}
+
+.mm-badge.mm-ok {
+	color: var(--mm-ok);
+	border-color: var(--mm-ok);
+}
+
+.mm-badge.mm-miss {
+	color: var(--mm-error);
+	border-color: var(--mm-error);
+}
+
+/* --- controls --------------------------------------------------------- */
+
+.mm-file,
+.mm-range {
+	border: 1px solid var(--mm-border);
+	border-radius: 2px;
+	background: var(--mm-bg);
+	color: var(--mm-fg);
+	padding: 3px 4px;
+	font: inherit;
+	max-width: 100%;
+}
+
+.mm-range {
+	width: 160px;
+}
+
+select.mm-select {
+	border: 1px solid var(--mm-border);
+	border-radius: 2px;
+	background: var(--mm-bg);
+	color: var(--mm-fg);
+	font: inherit;
+	padding: 2px 4px;
+	max-width: 180px;
+}
+
+button.mm-btn {
+	border: 1px solid var(--mm-border);
+	border-radius: 2px;
+	background: var(--mm-bg-alt);
+	color: var(--mm-fg);
+	font: inherit;
+	font-weight: bold;
+	padding: 4px 12px;
+	cursor: pointer;
+}
+
+button.mm-btn:hover {
+	background: var(--mm-border);
+}
+
+button.mm-btn:disabled {
+	opacity: 0.6;
+	cursor: default;
+}
+
+button.mm-btn.mm-primary {
+	background: var(--mm-accent);
+	border-color: var(--mm-accent);
+	color: var(--mm-accent-fg);
+}
+
+label.mm-check,
+label.mm-radio {
+	display: inline-block;
+	margin: 0 14px 0 0;
+	cursor: pointer;
+	user-select: none;
+}
+
+label.mm-check input,
+label.mm-radio input {
+	margin: 0 4px 0 0;
+	vertical-align: middle;
+}
+
+/* --- footer ----------------------------------------------------------- */
+
+.mm-nav {
+	display: -webkit-flex;
+	display: flex;
+	-webkit-flex-direction: row;
+	flex-direction: row;
+	-webkit-justify-content: space-between;
+	justify-content: space-between;
+	margin-top: 8px;
+}
+
+.mm-nav-right {
+	display: -webkit-flex;
+	display: flex;
+	gap: 6px;
+}
+
+.mm-status {
+	min-height: 16px;
+	margin-top: 6px;
+	line-height: 1.35;
+	color: var(--mm-fg-muted);
+	overflow-wrap: anywhere;
+}
+
+.mm-status.mm-error {
+	color: var(--mm-error);
+}
+
+.mm-status.mm-ok {
+	color: var(--mm-ok);
+}
+
+.mm-progress {
+	height: 3px;
+	margin-top: 4px;
+	background: var(--mm-bg-alt);
+	border-radius: 2px;
+	overflow: hidden;
+	display: none;
+}
+
+.mm-progress.mm-running {
+	display: block;
+}
+
+.mm-progress-bar {
+	height: 100%;
+	width: 30%;
+	background: var(--mm-accent);
+	-webkit-animation: mm-slide 1.2s infinite linear;
+	animation: mm-slide 1.2s infinite linear;
+}
+
+@-webkit-keyframes mm-slide {
+	0% {
+		margin-left: -30%;
+	}
+	100% {
+		margin-left: 100%;
+	}
+}
+
+@keyframes mm-slide {
+	0% {
+		margin-left: -30%;
+	}
+	100% {
+		margin-left: 100%;
+	}
+}

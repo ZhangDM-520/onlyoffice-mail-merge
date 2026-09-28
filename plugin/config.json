@@ -1,0 +1,47 @@
+{
+	"name": "Mail Merge",
+	"nameLocale": {
+		"zh": "邮件合并",
+		"ru": "Рассылка",
+		"fr": "Publipostage",
+		"de": "Serienbrief",
+		"es": "Combinación de correspondencia"
+	},
+	"guid": "asc.{2A0D08A5-D356-4057-A366-8A2AA579B4D7}",
+	"version": "0.1.0",
+	"minVersion": "8.2.0",
+	"variations": [
+		{
+			"description": "Merge a template document with recipients from a CSV, XLSX or JSON data source: wrap {{Field}} tokens into real merge fields and generate one combined document or one file per recipient.",
+			"descriptionLocale": {
+				"zh": "把模板文档与 CSV、XLSX 或 JSON 数据源中的收件人合并：把 {{Field}} 标记包装成真正的合并域，生成单个合并文档或每位收件人一个文件。",
+				"ru": "Объедините шаблон документа с получателями из CSV, XLSX или JSON: превратите токены {{Field}} в поля слияния и создайте один общий документ или отдельный файл для каждого получателя.",
+				"fr": "Fusionnez un modèle de document avec les destinataires d'une source CSV, XLSX ou JSON : transformez les jetons {{Field}} en champs de fusion et générez un document combiné ou un fichier par destinataire.",
+				"de": "Verbinden Sie ein Dokumentvorlage mit Empfängern aus einer CSV-, XLSX- oder JSON-Datenquelle: Wandeln Sie {{Field}}-Platzhalter in echte Serienbrief-Felder um und erzeugen Sie ein kombiniertes Dokument oder eine Datei pro Empfänger.",
+				"es": "Combine una plantilla de documento con destinatarios de una fuente de datos CSV, XLSX o JSON: convierta los tokens {{Field}} en campos de combinación reales y genere un documento combinado o un archivo por destinatario."
+			},
+			"url": "index.html",
+			"icons": "resources/%theme-type%(light|dark)/icon%scale%(default).png",
+			"isViewer": false,
+			"EditorsSupport": ["word"],
+			"type": "window",
+			"size": [640, 560],
+			"initDataType": "none",
+			"buttons": [
+				{ "text": "Cancel", "textLocale": { "zh": "取消", "ru": "Отмена", "fr": "Annuler", "de": "Abbrechen", "es": "Cancelar" } },
+				{ "text": "Merge", "primary": true, "textLocale": { "zh": "合并", "ru": "Слияние", "fr": "Fusionner", "de": "Zusammenführen", "es": "Combinar" } }
+			],
+			"store": {
+				"background": {
+					"light": "#2A5DB0",
+					"dark": "#2A5DB0"
+				},
+				"icons": {
+					"light": "resources/store/icons",
+					"dark": "resources/store/icons"
+				},
+				"categories": ["work", "specAbilities"]
+			}
+		}
+	]
+}

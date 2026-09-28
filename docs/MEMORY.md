@@ -24,7 +24,14 @@
    blocked inside callCommand since 7.1.
 5. Host here: `onlyoffice-git` (AUR, version 9.4.0.130 at time of writing) — git build,
    so SDK surface can drift; re-grep `sdk-all.js` before relying on an Api method.
-6. Installed plugin inventory lives in both roots; the LaTeX math plugin
+6. **Browser parse order is part of the contract.** `index.html` loads its scripts in
+   `<head>` while the mount root (`#mm-app`) is in `<body>` — anything that mounts at
+   script-parse time sees `null` and no-ops (empty plugin window). Boot on DOM-ready and
+   mount at most once; re-try host-hook installation too, because `Asc.plugin` can be
+   defined late (the `v1/plugins.js` shim fills `windowID` only in its onload config.json
+   XHR callback). Test harnesses must model the real load order, not a pre-built root —
+   a harness that builds the DOM first hides exactly this class of bug.
+7. Installed plugin inventory lives in both roots; the LaTeX math plugin
    (`~/Projects/onlyoffice-latex-math`, GUID `{5B4C1A72-...}`) is the reference sample for
    manifest layout, callCommand seam, icon slots (5 scales x 2 themes, no fallback) and
    test harness (`node --test`, fake-editor double).

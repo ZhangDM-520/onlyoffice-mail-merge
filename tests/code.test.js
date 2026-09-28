@@ -182,6 +182,30 @@ const DEFAULT_DATA = [
 	["Cid", "Kyoto", "red"]
 ];
 
+function makePlugin(log, options) {
+	return {
+		windowID: "sdk-id",
+		tr: function (text) {
+			return text;
+		},
+		resizeWindow: function (width, height) {
+			log.push({ kind: "method", name: "resizeWindow", args: [width, height] });
+		},
+		executeMethod: function (name, args, callback) {
+			log.push({ kind: "method", name: name, args: args });
+			if (name === "GetFileToDownload") {
+				queueMicrotask(function () {
+					callback(options.downloadResult === undefined ? "blob://saved" : options.downloadResult);
+				});
+			} else if (typeof callback === "function") {
+				queueMicrotask(function () {
+					callback("ok");
+				});
+			}
+		}
+	};
+}
+
 function boot(options) {
 	options = options || {};
 	const log = []; // every seam call, in order: {kind:"run"|"method", name, payload|args}
@@ -263,8 +287,14 @@ function boot(options) {
 		}
 	};
 
+	// The load-order tests drive the document the way a real parse does:
+	// code.js evaluates before #mm-app exists (deferApp) while readyState is
+	// still "loading", and boot only runs when DOMContentLoaded fires.
 	const root = new El("div");
 	root.setAttribute("id", "mm-app");
+
+	let appReady = !options.deferApp;
+	const docListeners = {};
 
 	const document = {
 		createElement: function (tag) {
@@ -274,10 +304,14 @@ function boot(options) {
 			return { nodeType: 3, data: String(text), textContent: String(text) };
 		},
 		getElementById: function (id) {
-			return id === "mm-app" ? root : null;
+			return id === "mm-app" && appReady ? root : null;
 		},
 		documentElement: new El("html"),
-		body: new El("body")
+		body: new El("body"),
+		readyState: options.readyState || "complete",
+		addEventListener: function (type, handler) {
+			(docListeners[type] = docListeners[type] || []).push(handler);
+		}
 	};
 
 	const win = {
@@ -287,31 +321,11 @@ function boot(options) {
 		XLSX: undefined,
 		OnlyOfficeMailMergeDataParse: DataParse,
 		OnlyOfficeMailMergeFieldMap: FieldMap,
-		OnlyOfficeMailMergeCommands: Commands,
-		Asc: {
-			plugin: {
-				windowID: "sdk-id",
-				tr: function (text) {
-					return text;
-				},
-				resizeWindow: function (width, height) {
-					log.push({ kind: "method", name: "resizeWindow", args: [width, height] });
-				},
-				executeMethod: function (name, args, callback) {
-					log.push({ kind: "method", name: name, args: args });
-					if (name === "GetFileToDownload") {
-						queueMicrotask(function () {
-							callback(options.downloadResult === undefined ? "blob://saved" : options.downloadResult);
-						});
-					} else if (typeof callback === "function") {
-						queueMicrotask(function () {
-							callback("ok");
-						});
-					}
-				}
-			}
-		}
+		OnlyOfficeMailMergeCommands: Commands
 	};
+	if (!options.noAsc) {
+		win.Asc = { plugin: makePlugin(log, options) };
+	}
 
 	// Run the real code.js in THIS realm (a Function wrapper supplying the two
 	// free variables its IIFE is called with). A vm context would give every
@@ -329,6 +343,18 @@ function boot(options) {
 			return log.map(function (entry) {
 				return entry.name;
 			});
+		},
+		fireDocument: function (type) {
+			(docListeners[type] || []).slice().forEach(function (handler) {
+				handler.call(document, { type: type });
+			});
+		},
+		setAppReady: function () {
+			appReady = true;
+		},
+		installFakeHost: function () {
+			win.Asc = { plugin: makePlugin(log, options) };
+			return win.Asc.plugin;
 		}
 	};
 }
@@ -982,4 +1008,79 @@ test("a throwing resizeWindow does not block navigation", () => {
 	};
 	h.ui.gotoStep(2);
 	assert.strictEqual(h.ui.state.step, 2, "the step still changes");
+});
+
+/* ------------------------------------------------------------------ *
+ * Boot sequence - the real load order
+ * ------------------------------------------------------------------ */
+
+test("boot: code.js parsed from <head> mounts the wizard once the body exists", () => {
+	// index.html loads every script in <head>, so code.js evaluates while
+	// #mm-app does not exist yet; the body arrives afterwards and
+	// DOMContentLoaded is what actually boots the wizard.
+	const h = boot({ readyState: "loading", deferApp: true });
+	assert.strictEqual(byClass(h.root, "mm-wrap").length, 0, "nothing mounts at parse time");
+
+	h.setAppReady();
+	h.fireDocument("DOMContentLoaded");
+	assert.strictEqual(byClass(h.root, "mm-wrap").length, 1, "the wizard mounts on DOMContentLoaded");
+	assert.strictEqual(byClass(h.root, "mm-chip").length, 3);
+	assert.strictEqual(byClass(h.root, "mm-step").length, 3);
+	assert.strictEqual(typeof h.win.Asc.plugin.button, "function", "the button hook is installed");
+	assert.strictEqual(typeof h.win.Asc.plugin.init, "function", "the init hook is installed");
+});
+
+test("boot: an already-parsed document mounts immediately without any event", () => {
+	const h = boot({ readyState: "interactive" });
+	assert.strictEqual(byClass(h.root, "mm-wrap").length, 1, "the wizard is mounted right after code.js runs");
+});
+
+test("boot: window.Asc arriving after code.js still gets the button/init hooks", async () => {
+	const h = boot({ readyState: "loading", deferApp: true, noAsc: true, search: "" });
+	h.setAppReady();
+	h.fireDocument("DOMContentLoaded");
+	assert.strictEqual(byClass(h.root, "mm-wrap").length, 1, "the wizard mounts without the host");
+	assert.ok(!h.win.Asc, "the host shim is not there yet");
+
+	const plugin = h.installFakeHost();
+	await new Promise(function (resolve) {
+		setTimeout(resolve, 150);
+	});
+	assert.strictEqual(typeof plugin.button, "function", "the button hook landed after the host did");
+	assert.strictEqual(typeof plugin.init, "function", "the init hook landed after the host did");
+
+	plugin.button(-1);
+	const closes = h.log.filter(function (entry) {
+		return entry.name === "CloseWindow";
+	});
+	assert.strictEqual(closes.length, 1, "the X routes to a CloseWindow call");
+	assert.deepStrictEqual(closes[0].args, ["sdk-id"], "with no URL id the SDK-published id closes the window");
+});
+
+test("closeWindow: a failing CloseWindow walks the id sources and ends bare", () => {
+	const h = boot();
+	const calls = [];
+	h.win.Asc.plugin.executeMethod = function (name, args) {
+		calls.push(args);
+		if (args.length && args[0] === "win-42") {
+			throw new Error("host refused the URL id");
+		}
+	};
+	const original = console.error;
+	console.error = function () {};
+	try {
+		h.ui.closeWindow();
+	} finally {
+		console.error = original;
+	}
+	assert.deepStrictEqual(calls, [["win-42"], ["sdk-id"]], "the URL id first, then the SDK id");
+
+	const bare = boot({ search: "" });
+	delete bare.win.Asc.plugin.windowID;
+	const bareCalls = [];
+	bare.win.Asc.plugin.executeMethod = function (name, args) {
+		bareCalls.push(args);
+	};
+	bare.ui.closeWindow();
+	assert.deepStrictEqual(bareCalls, [[]], "no id anywhere: a bare CloseWindow still goes out");
 });

@@ -655,7 +655,13 @@
 	 * Host window plumbing
 	 * ------------------------------------------------------------------ */
 
-	function getWindowId() {
+	// The SDK's own window close passes the id: sdk-all.js `h.prototype.close`
+	// is `executeMethod("CloseWindow", [this.id])`, and that same id is what
+	// ShowWindow appends to the page URL as `?windowID=`. The shim (plugins.js
+	// `q()`) copies the query into `Asc.plugin.windowID` only from its onload
+	// XHR callback, so the URL is the earliest source and the SDK value the
+	// fallback.
+	function queryWindowId() {
 		try {
 			var match = /[?&]windowID=([^&]+)/.exec(window.location.search || "");
 			if (match) {
@@ -664,6 +670,10 @@
 		} catch (e) {
 			/* fall through to the SDK-published value */
 		}
+		return undefined;
+	}
+
+	function sdkWindowId() {
 		try {
 			return (window.Asc && window.Asc.plugin && window.Asc.plugin.windowID) || undefined;
 		} catch (e) {
@@ -671,10 +681,29 @@
 		}
 	}
 
+	function getWindowId() {
+		var id = queryWindowId();
+		return id !== undefined ? id : sdkWindowId();
+	}
+
 	function closeWindow() {
-		var id = getWindowId();
+		var ids = [queryWindowId(), sdkWindowId()];
+		for (var i = 0; i < ids.length; i++) {
+			// Skip missing ids and a second attempt on the same one.
+			if (ids[i] === undefined || (i > 0 && ids[i] === ids[0])) {
+				continue;
+			}
+			try {
+				window.Asc.plugin.executeMethod("CloseWindow", [ids[i]]);
+				return;
+			} catch (e) {
+				console.error("[mail-merge] CloseWindow failed", e);
+			}
+		}
+		// No usable id (or both id attempts threw): the bare call is the last
+		// resort so the host still gets a chance to close the window.
 		try {
-			window.Asc.plugin.executeMethod("CloseWindow", id !== undefined ? [id] : []);
+			window.Asc.plugin.executeMethod("CloseWindow", []);
 		} catch (e) {
 			console.error("[mail-merge] CloseWindow failed", e);
 		}
@@ -1262,48 +1291,61 @@
 		});
 	}
 
-	function installHostHooks() {
-		if (!window.Asc || !window.Asc.plugin) {
-			return;
+	function hostInit() {
+		var settings = loadSettings(storage());
+		state.wrapMatched = settings.wrapMatched;
+		state.mode = settings.mode;
+		state.range = settings.range;
+		state.format = settings.format;
+		if (view.wrapToggle) {
+			view.wrapToggle.checked = state.wrapMatched;
 		}
-		window.Asc.plugin.init = function () {
-			var settings = loadSettings(storage());
-			state.wrapMatched = settings.wrapMatched;
-			state.mode = settings.mode;
-			state.range = settings.range;
-			state.format = settings.format;
-			if (view.wrapToggle) {
-				view.wrapToggle.checked = state.wrapMatched;
-			}
-			if (view.rangeInput) {
-				view.rangeInput.value = state.range;
-			}
-			if (view.formatSelect) {
-				view.formatSelect.value = state.format;
-			}
-			if (view.combinedInput) {
-				view.combinedInput.checked = state.mode === "combined";
-				view.perRecordInput.checked = state.mode === "per-record";
-			}
-			renderAll();
-		};
+		if (view.rangeInput) {
+			view.rangeInput.value = state.range;
+		}
+		if (view.formatSelect) {
+			view.formatSelect.value = state.format;
+		}
+		if (view.combinedInput) {
+			view.combinedInput.checked = state.mode === "combined";
+			view.perRecordInput.checked = state.mode === "per-record";
+		}
+		renderAll();
+	}
 
-		// MANDATORY: variation buttons arrive as ids; -1 is the X.
-		window.Asc.plugin.button = function (id, windowId) {
-			handleButton(id, windowId);
-		};
+	// MANDATORY: variation buttons arrive as ids; -1 is the X.
+	function hostButton(id, windowId) {
+		handleButton(id, windowId);
+	}
 
-		window.Asc.plugin.onThemeChanged = function (theme) {
-			applyTheme(theme);
-			if (typeof window.Asc.plugin.onThemeChangedBase === "function") {
-				window.Asc.plugin.onThemeChangedBase(theme);
-			}
-		};
+	function hostThemeChanged(theme) {
+		applyTheme(theme);
+		if (typeof window.Asc.plugin.onThemeChangedBase === "function") {
+			window.Asc.plugin.onThemeChangedBase(theme);
+		}
+	}
 
-		// The earliest point at which Asc.plugin.tr() returns real translations.
-		window.Asc.plugin.onTranslate = function () {
-			renderAll();
-		};
+	// The earliest point at which Asc.plugin.tr() returns real translations.
+	function hostTranslate() {
+		renderAll();
+	}
+
+	// Idempotent: re-running (boot, late `window.Asc`, a host-side plugin
+	// object swap) never stacks a second hook layer - the same named functions
+	// are assigned, and a second install on the same object is a no-op.
+	function installHostHooks() {
+		var plugin = window.Asc && window.Asc.plugin;
+		if (!plugin) {
+			return false;
+		}
+		if (plugin.init === hostInit && plugin.button === hostButton) {
+			return true;
+		}
+		plugin.init = hostInit;
+		plugin.button = hostButton;
+		plugin.onThemeChanged = hostThemeChanged;
+		plugin.onTranslate = hostTranslate;
+		return true;
 	}
 
 	// Public surface: the dev console and the tests drive the same seams the
@@ -1331,6 +1373,51 @@
 		applyTheme: applyTheme
 	};
 
-	installHostHooks();
-	mount(document.getElementById("mm-app"));
+	/* ------------------------------------------------------------------ *
+	 * Boot
+	 *
+	 * index.html loads this file from <head>, so at parse time #mm-app does
+	 * not exist yet - boot must wait for the body. A document that is already
+	 * parsed boots immediately. window.Asc (and even the mount target) can
+	 * also arrive after us, so anything still missing is retried briefly
+	 * instead of being given up on at load time.
+	 * ------------------------------------------------------------------ */
+
+	var bootWatchTimer = null;
+	var BOOT_TRIES = 100;
+	var BOOT_INTERVAL = 50;
+
+	function scheduleBootRetry() {
+		if (bootWatchTimer !== null) {
+			return;
+		}
+		var tries = 0;
+		bootWatchTimer = setInterval(function () {
+			boot();
+			if ((view.wrap && installHostHooks()) || ++tries >= BOOT_TRIES) {
+				clearInterval(bootWatchTimer);
+				bootWatchTimer = null;
+			}
+		}, BOOT_INTERVAL);
+	}
+
+	function boot() {
+		if (!view.wrap) {
+			mount(document.getElementById("mm-app"));
+		}
+		if (installHostHooks() && view.wrap) {
+			return;
+		}
+		scheduleBootRetry();
+	}
+
+	function whenDocumentReady(fn) {
+		if (document.readyState === "loading" && typeof document.addEventListener === "function") {
+			document.addEventListener("DOMContentLoaded", fn);
+			return;
+		}
+		fn();
+	}
+
+	whenDocumentReady(boot);
 })(window, document);

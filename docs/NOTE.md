@@ -89,3 +89,25 @@ Desktop UI (web-apps) exposes none of it — no Mailings tab, nothing in locales
   store tile at 5 scales x (light|dark) + store set; `--check` = "16 files ok".
 - Tests: `tests/code.test.js` (fake DOM + fake contract seams, 23 tests) and
   `tests/icons.test.js` (PNG pixel checks, 4 tests); `node --test tests/` green.
+
+## Empty plugin window regression — 2026-09-28, second session
+
+- Symptom: plugin registered but the window rendered empty — "no event handlers, can't
+  close, no function at all".
+- Root cause: `index.html` loads its scripts in `<head>`, `#mm-app` sits in `<body>`, and
+  `code.js` ran `installHostHooks(); mount(document.getElementById("mm-app"))` at
+  script-parse time; `mount()` no-ops on a null root, so the wizard was never built.
+  Compounding: `installHostHooks()` silently bailed when `window.Asc.plugin` was not yet
+  defined and was never retried, so variation buttons and the X/close route were never
+  wired. The existing tests masked it — their harness mounted into a pre-built root.
+- Fix: boot on DOM-ready (`whenDocumentReady` + mount-once guard + late-Asc retry
+  polling), double-install-safe host hooks, hardened `closeWindow` fallback walk
+  (URL `?windowID=` -> `Asc.plugin.windowID` -> bare `executeMethod("CloseWindow", [])`).
+- Test evidence: `tests/code.test.js` regressions (real head-before-body load order,
+  already-parsed document, late Asc, close fallback walk) — 3 of 4 red on old code;
+  `tests/host-integration.test.js` runs the real script chain incl. the `/opt` `v1/plugins.js`
+  shim and real vendored libs in `node:vm` — red at the `.mm-wrap` group on buggy code.
+- `v1/plugins.js` shim findings: it copies the URL `?windowID=` into
+  `Asc.plugin.windowID` only late, via its `window.onload` config.json XHR callback;
+  `executeMethod` routes per-window only once `windowID` is set — hence the URL-param
+  first branch in `closeWindow`.

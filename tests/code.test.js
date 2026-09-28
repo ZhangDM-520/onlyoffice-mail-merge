@@ -578,6 +578,30 @@ test("close: no id anywhere falls through to bare CloseWindow and executeCommand
 	assert.deepStrictEqual(bareCalls, [["close", ""]], "an unavailable executeMethod still closes via executeCommand");
 });
 
+test("close: a silently succeeding bare CloseWindow still reaches executeCommand('close')", () => {
+	// Real-host behaviour: pluginMethod_CloseWindow accepts anything and
+	// no-ops on ids it does not know - it never throws. The old chain
+	// returned on that "success" and the main window could never close.
+	const calls = [];
+	const h = boot({ search: "" });
+	delete h.win.Asc.plugin.windowID;
+	h.win.Asc.plugin.executeMethod = function (name, args) {
+		calls.push(["executeMethod", name, args]);
+	};
+	h.win.Asc.plugin.executeCommand = function (command, param) {
+		calls.push(["executeCommand", command, param]);
+	};
+	h.ui.handleButton(-1);
+	assert.deepStrictEqual(
+		calls,
+		[
+			["executeMethod", "CloseWindow", []],
+			["executeCommand", "close", ""]
+		],
+		"executeCommand is unconditional - CloseWindow success means nothing for the main window"
+	);
+});
+
 /* ------------------------------------------------------------------ *
  * Pipeline sequencing
  * ------------------------------------------------------------------ */

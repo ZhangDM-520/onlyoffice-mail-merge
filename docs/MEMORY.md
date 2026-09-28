@@ -35,6 +35,14 @@
    (`~/Projects/onlyoffice-latex-math`, GUID `{5B4C1A72-...}`) is the reference sample for
    manifest layout, callCommand seam, icon slots (5 scales x 2 themes, no fallback) and
    test harness (`node --test`, fake-editor double).
+8. **Closing a plugin window (verified in the 9.4.0 host, 2026-09-28).**
+   `executeMethod("CloseWindow", [id])` only closes windows registered via `ShowWindow` —
+   it silently no-ops on any other id (including `[]`/undefined) and never throws. The MAIN
+   window-type variation gets NO windowId with its clicks (web-apps calls
+   `asc_pluginButtonClick(id, guid)` 2-arg), so the ONLY working close is
+   `Asc.plugin.executeCommand("close", "")`. The window X/ESC routes to
+   `Asc.plugin.button(-1, …)`; once the plugin defines that hook, the host never
+   auto-closes. Never treat a "successful" `CloseWindow` as evidence the window closed.
 
 ## Rejected approaches
 

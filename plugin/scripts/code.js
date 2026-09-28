@@ -699,29 +699,37 @@
 	// through, the shim's own default close (`executeCommand("close", "")`) is
 	// the final fallback.
 	function closeWindow(hintId) {
+		// The host only closes plugin windows registered via ShowWindow:
+		// CloseWindow silently ignores everything else - including the MAIN
+		// window-type variation and empty arguments (verified in the 9.4.0
+		// host audit: pluginMethod_CloseWindow no-ops on unknown frame ids).
+		// executeCommand("close") is the one channel that tears the main
+		// window down, so it always runs last; in window frames it is
+		// disabled, which makes the call harmless there.
 		var ids = [hintId, queryWindowId(), sdkWindowId()];
+		var attempted = false;
 		for (var i = 0; i < ids.length; i++) {
 			// Skip missing ids and a second attempt on the same one.
 			if (ids[i] === undefined || ids[i] === null || ids[i] === "" || (i > 0 && ids.indexOf(ids[i]) !== i)) {
 				continue;
 			}
+			attempted = true;
 			try {
 				window.Asc.plugin.executeMethod("CloseWindow", [ids[i]]);
-				return;
+				break;
 			} catch (e) {
 				console.error("[mail-merge] CloseWindow failed", e);
 			}
 		}
-		// No usable id (or every id attempt threw): the bare call is the next
-		// resort so the host still gets a chance to close the window.
-		try {
-			window.Asc.plugin.executeMethod("CloseWindow", []);
-			return;
-		} catch (e) {
-			console.error("[mail-merge] CloseWindow failed", e);
+		if (!attempted) {
+			// No usable id: the bare call is a proven no-op on this host but
+			// keeps older hosts in play before the final fallback.
+			try {
+				window.Asc.plugin.executeMethod("CloseWindow", []);
+			} catch (e) {
+				console.error("[mail-merge] CloseWindow failed", e);
+			}
 		}
-		// Final fallback: the shim's default close for a button press the
-		// plugin does not consume - some hosts honour only this channel.
 		try {
 			window.Asc.plugin.executeCommand("close", "");
 		} catch (e) {

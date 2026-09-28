@@ -29,8 +29,11 @@
  *       Api.MailMerge(start,end) — replaces the open document with merged output.
  *   restoreTemplate            {}        -> {ok}
  *       Api.ReplaceDocumentContent(snapshot).
- *   replacePlain               {plan}    -> {ok, replaced}
- *       Sequential Api.SearchAndReplace over [{searchString,replaceString}].
+ *   replacePlain               {plan}    -> {ok, replaced, errors}
+ *       Sequential SearchAndReplace over [{searchString,replaceString,matchCase}];
+ *       `replaced` counts OCCURRENCES (the engine replaces all matches per call);
+ *       `errors` lists entries skipped (e.g. 'unsafe-value' for data containing
+ *       the caret-marker). Replacement values are caret-safe (see body).
  *
  * Dispatch contract: `run(name, payload, callback)` - the callback receives
  * exactly one argument, the parsed result shaped {ok:true,...} | {ok:false,error}.
@@ -49,9 +52,10 @@
 	"use strict";
 
 	// Helpers shared by every editor-page command. The prelude is evaluated
-	// *inside the editor page*, where `window`, `document` and `alert` are
-	// blocked (ONLYOFFICE 7.1+) - nothing below may touch them, not even under
-	// a typeof guard: a blocked global can throw where an absent one would not.
+	// *inside the editor page*, where ONLYOFFICE 7.1+ shadow-stubs `window`,
+	// `document` and `alert` as empty objects/no-ops (safePluginEval binds them
+	// as function parameters) - nothing below may rely on them behaving like
+	// the real DOM, and `root.*` here belongs to the plugin iframe instead.
 	var PRELUDE = [
 		"function resolveApi() {",
 		"	if (typeof Api !== 'undefined' && Api) return Api;",
@@ -523,22 +527,61 @@
 		"if (!target) return JSON.stringify({ ok: false, error: 'replace-unavailable' });",
 		"var plan = S.plan;",
 		"if (!plan || typeof plan.length !== 'number') return JSON.stringify({ ok: false, error: 'no-plan' });",
+		// CSearchPatternEngine interprets ^t/^p/^l/^n/^m/^~ in replacement
+		// strings (inserting field codes) and offers no escape - but a lone
+		// trailing '^' inserts a literal caret. So every caret in the data
+		// travels as a private-use marker and is demoted back in one final
+		// pass: a value like "a^p" survives as text instead of a paragraph
+		// mark. A value that already carries the marker is refused outright.
+		"var CARET_MARKER = '\\uE0FF';",
+		"function demoteCarets() {",
+		"	try { target.SearchAndReplace({ searchString: CARET_MARKER, replaceString: '^', matchCase: true }); } catch (e) { /* leave markers rather than throw */ }",
+		"}",
+		"function countOccurrences(needle, matchCase) {",
+		"	var paragraphs = allParagraphsOf(A);",
+		"	if (!paragraphs) return 0;",
+		"	var total = 0;",
+		"	var hay = matchCase === false ? needle.toLowerCase() : needle;",
+		"	for (var ci = 0; ci < paragraphs.length; ci++) {",
+		"		var text = paraTextOf(paragraphs[ci]) || '';",
+		"		if (matchCase === false) text = text.toLowerCase();",
+		"		var from = 0;",
+		"		for (;;) {",
+		"			var at = text.indexOf(hay, from);",
+		"			if (at < 0) break;",
+		"			total++;",
+		"			from = at + hay.length;",
+		"		}",
+		"	}",
+		"	return total;",
+		"}",
 		"var replaced = 0;",
+		"var errors = [];",
+		"var demoteNeeded = false;",
 		"for (var i = 0; i < plan.length; i++) {",
 		"	var entry = plan[i];",
 		"	if (!entry || typeof entry.searchString !== 'string' || entry.searchString === '') continue;",
-		"	var props = {",
-		"		searchString: entry.searchString,",
-		"		replaceString: typeof entry.replaceString === 'string' ? entry.replaceString : '',",
-		"		matchCase: entry.matchCase === undefined ? true : !!entry.matchCase",
-		"	};",
+		"	var value = typeof entry.replaceString === 'string' ? entry.replaceString : '';",
+		"	if (value.indexOf(CARET_MARKER) >= 0) {",
+		"		errors.push({ searchString: entry.searchString, error: 'unsafe-value' });",
+		"		continue;",
+		"	}",
+		"	if (value.indexOf('^') >= 0) {",
+		"		value = value.split('^').join(CARET_MARKER);",
+		"		demoteNeeded = true;",
+		"	}",
+		"	var matchCase = entry.matchCase === undefined ? true : !!entry.matchCase;",
+		"	var occurrences = countOccurrences(entry.searchString, matchCase);",
+		"	var props = { searchString: entry.searchString, replaceString: value, matchCase: matchCase };",
 		"	try {",
-		"		if (target.SearchAndReplace(props)) replaced++;",
+		"		if (target.SearchAndReplace(props)) replaced += (occurrences > 0 ? occurrences : 1);",
 		"	} catch (e) {",
-		"		return JSON.stringify({ ok: false, error: 'replace-failed: ' + errorText(e), replaced: replaced });",
+		"		if (demoteNeeded) demoteCarets();",
+		"		return JSON.stringify({ ok: false, error: 'replace-failed: ' + errorText(e), replaced: replaced, errors: errors });",
 		"	}",
 		"}",
-		"return JSON.stringify({ ok: true, replaced: replaced });"
+		"if (demoteNeeded) demoteCarets();",
+		"return JSON.stringify({ ok: true, replaced: replaced, errors: errors });"
 	].join("\n");
 
 	var RUNNERS = {

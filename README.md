@@ -62,6 +62,17 @@ editor and clear its renderer cache:
 rm -rf ~/.local/share/onlyoffice/desktopeditors/data/cache/{Cache,Code\ Cache}
 ```
 
+**Per-user installs need a real `v1/` loader.** Plugin frames resolve `../v1/plugins.js`
+against the sdkjs-plugins root *they live in*. On some installs the per-user root
+(`~/.local/share/.../sdkjs-plugins/v1/`) ships only zero-byte stubs, so a per-user-only
+plugin enumerates but its API is dead. Fix it once by copying the real loaders from the
+system root (or install the plugin system-wide like the bundled plugins):
+
+```bash
+cp -p /opt/onlyoffice/desktopeditors/editors/sdkjs-plugins/v1/{plugins.js,plugins-ui.js,plugins.css} \
+      ~/.local/share/onlyoffice/desktopeditors/sdkjs-plugins/v1/
+```
+
 ## Development
 
 ```

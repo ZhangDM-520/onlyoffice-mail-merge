@@ -759,3 +759,227 @@ test("merge only closes the window once the save dialog has answered", async () 
 		"the save dialog comes before CloseWindow"
 	);
 });
+
+/* ------------------------------------------------------------------ *
+ * Edge cases: degenerate data, gapped ranges, cancel/error unwinding,
+ * re-entrancy and UI resilience
+ * ------------------------------------------------------------------ */
+
+test("zero recipients is refused before any merge command runs", async () => {
+	// A header-only source yields data.length === 1 - loadMergeData would
+	// report count 0, so the pipeline refuses before it loads anything.
+	const h = boot({ data: [["Name"]] });
+	h.ui.loadSourceText("recipients.csv", "raw");
+	await h.ui.handleButton(1);
+
+	assert.deepStrictEqual(h.names(), ["getDocumentText"], "not even loadMergeData is reached");
+	assert.match(byClass(h.root, "mm-status")[0].textContent, /no recipient rows/i);
+	assert.strictEqual(h.ui.state.running, false, "the wizard is usable again");
+});
+
+test("exactly one recipient merges a single {start:0,end:0} record", async () => {
+	const h = boot({ data: [["Name"], ["Ann"]] });
+	h.ui.loadSourceText("recipients.csv", "raw");
+	await h.ui.handleButton(1);
+
+	const merges = h.log.filter(function (entry) {
+		return entry.name === "mergeRange";
+	});
+	assert.deepStrictEqual(merges.map(function (entry) {
+		return entry.payload;
+	}), [{ start: 0, end: 0 }]);
+	assert.strictEqual(h.log.filter(function (entry) {
+		return entry.name === "GetFileToDownload";
+	}).length, 1, "one save dialog for the one recipient");
+	assert.ok(h.names().includes("CloseWindow"));
+});
+
+test('a gapped range "1-3,7" merges exactly those records, one file each', async () => {
+	const rows = [["Name"]];
+	for (let i = 1; i <= 7; i++) {
+		rows.push(["r" + i]);
+	}
+	const h = boot({ data: rows });
+	h.ui.loadSourceText("recipients.csv", "raw");
+	await h.ui.scanDocument();
+	h.ui.state.mode = "per-record";
+	h.ui.state.range = "1-3,7";
+	await h.ui.handleButton(1);
+
+	const merges = h.log.filter(function (entry) {
+		return entry.name === "mergeRange";
+	});
+	assert.deepStrictEqual(merges.map(function (entry) {
+		return entry.payload;
+	}), [{ start: 0, end: 0 }, { start: 1, end: 1 }, { start: 2, end: 2 }, { start: 6, end: 6 }]);
+	assert.strictEqual(h.log.filter(function (entry) {
+		return entry.name === "GetFileToDownload";
+	}).length, 4, "one save dialog per selected recipient");
+	assert.ok(h.names().includes("CloseWindow"));
+});
+
+test('the same gapped "1-3,7" range is refused in combined mode', async () => {
+	const rows = [["Name"]];
+	for (let i = 1; i <= 7; i++) {
+		rows.push(["r" + i]);
+	}
+	const h = boot({ data: rows });
+	h.ui.loadSourceText("recipients.csv", "raw");
+	await h.ui.scanDocument();
+	const outcome = await h.ui.runMergePipeline({
+		data: h.ui.state.source.data,
+		paragraphs: h.ui.state.paragraphs,
+		matched: h.ui.state.mapping.matched,
+		unmatched: h.ui.state.mapping.unmatched,
+		allTokens: h.ui.state.tokens,
+		wrapMatched: true,
+		mode: "combined",
+		format: "docx",
+		rangeText: "1-3,7"
+	});
+	assert.strictEqual(outcome.ok, false);
+	assert.match(outcome.error, /contiguous/i);
+	assert.deepStrictEqual(h.names(), ["getDocumentText"], "the refusal precedes every pipeline command");
+});
+
+test("an error mid per-record loop restores the template and stops", async () => {
+	const h = boot({ failCommand: "replacePlain" });
+	h.ui.loadSourceText("recipients.csv", "raw");
+	await h.ui.scanDocument();
+	h.ui.state.mode = "per-record";
+	await h.ui.handleButton(1);
+
+	assert.strictEqual(h.log.filter(function (entry) {
+		return entry.name === "mergeRange";
+	}).length, 1, "only the failing record was merged");
+	assert.ok(h.names().includes("restoreTemplate"), "the template is back");
+	assert.ok(!h.names().includes("CloseWindow"), "an error keeps the window open");
+	assert.ok(!h.names().includes("GetFileToDownload"), "nothing is saved after a failure");
+	assert.match(byClass(h.root, "mm-status")[0].textContent, /replacePlain/);
+	assert.strictEqual(h.ui.state.running, false, "the wizard is usable again");
+});
+
+test("a cancel mid combined run unwinds: restore, no save dialog", async () => {
+	const h = boot();
+	h.ui.loadSourceText("recipients.csv", "raw");
+	await h.ui.scanDocument();
+
+	let runCalls = 0;
+	let downloadCalls = 0;
+	const outcome = await h.ui.runMergePipeline({
+		data: h.ui.state.source.data,
+		paragraphs: h.ui.state.paragraphs,
+		matched: h.ui.state.mapping.matched,
+		unmatched: h.ui.state.mapping.unmatched,
+		allTokens: h.ui.state.tokens,
+		wrapMatched: true,
+		mode: "combined",
+		format: "docx",
+		rangeText: "",
+		exec: function (name, payload) {
+			runCalls++;
+			h.log.push({ kind: "run", name: name, payload: payload });
+			return new Promise(function (resolve) {
+				queueMicrotask(function () {
+					resolve({ ok: true });
+				});
+			});
+		},
+		download: function () {
+			downloadCalls++;
+			return Promise.resolve({ ok: true, url: "blob://saved" });
+		},
+		isCancelled: function () {
+			return runCalls >= 4;
+		},
+		onProgress: function () {}
+	});
+
+	assert.strictEqual(outcome.ok, false);
+	assert.strictEqual(outcome.cancelled, true);
+	assert.strictEqual(h.log.filter(function (entry) {
+		return entry.name === "mergeRange";
+	}).length, 1, "the combined merge happened before the cancel landed");
+	assert.ok(h.names().includes("restoreTemplate"), "the template is back");
+	assert.strictEqual(downloadCalls, 0, "no save dialog is opened after a cancel");
+});
+
+test("a rapid double-click on Merge runs exactly one pipeline", async () => {
+	// The latch must be set before the first await (the document scan):
+	// otherwise the second click starts its own interleaved run.
+	const h = boot();
+	h.ui.loadSourceText("recipients.csv", "raw");
+	h.ui.state.mode = "per-record";
+	const first = h.ui.handleButton(1);
+	h.ui.handleButton(1);
+	await first;
+
+	assert.strictEqual(h.log.filter(function (entry) {
+		return entry.name === "getDocumentText";
+	}).length, 1, "the document is scanned once");
+	assert.strictEqual(h.log.filter(function (entry) {
+		return entry.name === "loadMergeData";
+	}).length, 1, "one pipeline, one load");
+	assert.strictEqual(h.log.filter(function (entry) {
+		return entry.name === "mergeRange";
+	}).length, 3, "still one record per recipient");
+	assert.strictEqual(h.log.filter(function (entry) {
+		return entry.name === "CloseWindow";
+	}).length, 1, "the window closes once");
+	assert.strictEqual(h.ui.state.running, false, "the latch is released");
+});
+
+test("combined mode warns about plain-replaced tokens even with wrapping on", async () => {
+	const h = boot();
+	h.ui.loadSourceText("recipients.csv", "raw");
+	await h.ui.scanDocument();
+
+	const warning = byClass(h.root, "mm-warning")[0];
+	assert.notStrictEqual(warning.style.display, "none", "the warning is visible");
+	assert.match(warning.textContent, /combined/i);
+	assert.match(warning.textContent, /blank/i);
+
+	// Turning off the fallback for the unmatched token removes the only
+	// plain-replaced token, and the warning goes with it.
+	const fallback = findAll(h.root, function (node) {
+		return node.tagName === "INPUT" &&
+			node.getAttribute("type") === "checkbox" &&
+			node.parentNode &&
+			node.parentNode.classList.contains("mm-check") &&
+			/plain replace/.test(node.parentNode.textContent);
+	})[0];
+	assert.ok(fallback, "the unmatched token has a plain-replace checkbox");
+	fallback.checked = false;
+	fallback.dispatch("change");
+	assert.strictEqual(warning.style.display, "none", "no plain tokens, no warning");
+
+	// Per-record mode never blanks, so it never warns.
+	fallback.checked = true;
+	fallback.dispatch("change");
+	assert.notStrictEqual(warning.style.display, "none");
+	h.ui.state.mode = "per-record";
+	h.ui.gotoStep(2);
+	assert.strictEqual(warning.style.display, "none");
+});
+
+test("very long names stay in the table cells: truncation is pinned in CSS", () => {
+	// The DOM cannot elide a 500-char header; the ellipsis is styles.css's job,
+	// so pin the contract instead of pretending the fake DOM lays out text.
+	const css = fs.readFileSync(path.join(ROOT, "plugin", "styles.css"), "utf8");
+	const rule = /\.mm-table th,\s*\.mm-table td\s*\{([^}]*)\}/.exec(css);
+	assert.ok(rule, "the shared th/td rule exists");
+	assert.match(rule[1], /max-width:\s*\d/);
+	assert.match(rule[1], /overflow:\s*hidden/);
+	assert.match(rule[1], /text-overflow:\s*ellipsis/);
+	assert.match(rule[1], /white-space:\s*nowrap/);
+});
+
+test("a throwing resizeWindow does not block navigation", () => {
+	const h = boot();
+	h.ui.loadSourceText("recipients.csv", "raw");
+	h.win.Asc.plugin.resizeWindow = function () {
+		throw new Error("host refused the resize");
+	};
+	h.ui.gotoStep(2);
+	assert.strictEqual(h.ui.state.step, 2, "the step still changes");
+});

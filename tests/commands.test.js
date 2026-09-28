@@ -331,7 +331,7 @@ test("replacePlain replaces sequentially and counts the replacements", async fun
 			{ searchString: "{{Nope}}", replaceString: "x" }
 		]
 	}));
-	assert.deepEqual(result, { ok: true, replaced: 2 });
+	assert.deepEqual(result, { ok: true, replaced: 2, errors: [] });
 	assert.equal(editor.text(), "Hi Ada, welcome to Paris.");
 	assert.equal(editor.api.__mmSnapshot, undefined);
 
@@ -343,7 +343,7 @@ test("replacePlain replaces sequentially and counts the replacements", async fun
 			{ searchString: "Colour", replaceString: "Y", matchCase: false }
 		]
 	}));
-	assert.deepEqual(casedResult, { ok: true, replaced: 2 });
+	assert.deepEqual(casedResult, { ok: true, replaced: 2, errors: [] });
 	assert.equal(cased.text(), "Y X");
 });
 
@@ -443,4 +443,126 @@ test("a synchronous host answer clears the armed backstop instead of orphaning i
 	assert.equal(timers[0].fired, false);
 	await wait(50);
 	assert.equal(timers[0].fired, false);
+});
+
+test("wrapFields wraps the same token twice in one paragraph", async function () {
+	var editor = createEditor({ paragraphs: ["Dear {{Name}}, cc {{Name}}!"] });
+	var result = plain(await createFrame(editor).runCommand("wrapFields", {}));
+	assert.deepEqual(result, {
+		ok: true,
+		wrapped: [{ name: "Name", count: 2 }],
+		errors: [],
+		degraded: false
+	});
+	// Right-to-left surgery keeps the earlier span's offsets valid, so both
+	// occurrences become fields and the text around them is untouched.
+	assert.deepEqual(editor.structure(), [[
+		{ kind: "run", text: "Dear " },
+		{ kind: "field", name: "Name", display: "\u00ABName\u00BB" },
+		{ kind: "run", text: ", cc " },
+		{ kind: "field", name: "Name", display: "\u00ABName\u00BB" },
+		{ kind: "run", text: "!" }
+	]]);
+});
+
+test("wrapFields keeps offsets aligned across astral characters", async function () {
+	// wrapPlan offsets are UTF-16 code units, as are GetText() strings and the
+	// Split2(position) the surgery feeds - an emoji before the token must not
+	// shift the span onto the wrong runs.
+	var editor = createEditor({ paragraphs: ["🎉 {{Name}} is here"] });
+	var result = plain(await createFrame(editor).runCommand("wrapFields", {}));
+	assert.deepEqual(result, {
+		ok: true,
+		wrapped: [{ name: "Name", count: 1 }],
+		errors: [],
+		degraded: false
+	});
+	assert.deepEqual(editor.structure(), [[
+		{ kind: "run", text: "\uD83C\uDF89 " },
+		{ kind: "field", name: "Name", display: "\u00ABName\u00BB" },
+		{ kind: "run", text: " is here" }
+	]]);
+});
+
+test("wrapFields is idempotent: a second pass never re-wraps fields", async function () {
+	// Surgery path: after the first pass the paragraph shows «Name», which
+	// contains no token, so the second pass is a no-op.
+	var editor = createEditor({ paragraphs: ["Dear {{Name}},"] });
+	var frame = createFrame(editor);
+	assert.deepEqual(plain(await frame.runCommand("wrapFields", {})), {
+		ok: true, wrapped: [{ name: "Name", count: 1 }], errors: [], degraded: false
+	});
+	var before = editor.structure();
+	assert.deepEqual(plain(await frame.runCommand("wrapFields", {})), {
+		ok: true, wrapped: [], errors: [], degraded: false
+	});
+	assert.deepEqual(editor.structure(), before, "the field is not wrapped again or split");
+
+	// Degraded path: the display keeps the raw token text, and a second pass
+	// must still leave the single field alone (it reports, it does not wrap).
+	var degradedEditor = createEditor({ paragraphs: ["{{Name}}"] });
+	var degradedFrame = createFrame(degradedEditor, { omitLowLevelGlobals: true });
+	await degradedFrame.runCommand("wrapFields", {});
+	assert.equal(degradedEditor.state.fields.length, 1);
+	var degradedBefore = degradedEditor.structure();
+	await degradedFrame.runCommand("wrapFields", {});
+	assert.equal(degradedEditor.state.fields.length, 1, "no second field is registered");
+	assert.deepEqual(degradedEditor.structure(), degradedBefore);
+});
+
+test("loadMergeData with only a header row loads zero receptions", async function () {
+	var frame = createFrame(createEditor({}));
+	var loaded = plain(await frame.runCommand("loadMergeData", { data: [["Name"]] }));
+	assert.deepEqual(loaded, { ok: true, count: 0 });
+	assert.deepEqual(plain(await frame.runCommand("getMergeCount", {})), { ok: true, count: 0 });
+	// Truly empty data is still refused before it reaches the editor.
+	assert.deepEqual(plain(await frame.runCommand("loadMergeData", { data: [] })),
+		{ ok: false, error: "merge-data-empty" });
+});
+
+test("replacePlain replaces every occurrence of a repeated token and counts them", async function () {
+	var editor = createEditor({ paragraphs: ["Dear {{Name}}, cc {{Name}}."] });
+	var result = plain(await createFrame(editor).runCommand("replacePlain", {
+		plan: [{ searchString: "{{Name}}", replaceString: "Ada" }]
+	}));
+	assert.deepEqual(result, { ok: true, replaced: 2, errors: [] });
+	assert.equal(editor.text(), "Dear Ada, cc Ada.");
+});
+
+test("replacePlain keeps caret sequences in values literal", async function () {
+	// The engine's replacement pattern language would turn ^p/^t into field
+	// codes; the command routes carets through a marker so data survives.
+	var editor = createEditor({ paragraphs: ["v={{V}} end"] });
+	var result = plain(await createFrame(editor).runCommand("replacePlain", {
+		plan: [{ searchString: "{{V}}", replaceString: "a^p b^t c^^ d^" }]
+	}));
+	assert.deepEqual(result, { ok: true, replaced: 1, errors: [] });
+	assert.equal(editor.text(), "v=a^p b^t c^^ d^ end");
+});
+
+test("replacePlain refuses values carrying the caret marker", async function () {
+	var editor = createEditor({ paragraphs: ["{{A}} {{B}}"] });
+	var result = plain(await createFrame(editor).runCommand("replacePlain", {
+		plan: [
+			{ searchString: "{{A}}", replaceString: "bad\uE0FFvalue" },
+			{ searchString: "{{B}}", replaceString: "good" }
+		]
+	}));
+	assert.deepEqual(result, { ok: true, replaced: 1, errors: [{ searchString: "{{A}}", error: "unsafe-value" }] });
+	assert.equal(editor.text(), "{{A}} good");
+});
+
+test("replacePlain keeps $-shaped replacement values literal", async function () {
+	// SearchAndReplace takes plain strings: "$&" is a price, not a pattern.
+	var matchCases = [undefined, false];
+	for (var i = 0; i < matchCases.length; i++) {
+		var editor = createEditor({ paragraphs: ["cost: {{V}}"] });
+		var plan = [{ searchString: "{{V}}", replaceString: "$& $1 $$" }];
+		if (matchCases[i] !== undefined) {
+			plan[0].matchCase = matchCases[i];
+		}
+		var result = plain(await createFrame(editor).runCommand("replacePlain", { plan: plan }));
+		assert.deepEqual(result, { ok: true, replaced: 1, errors: [] });
+		assert.equal(editor.text(), "cost: $& $1 $$");
+	}
 });

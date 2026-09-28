@@ -703,18 +703,23 @@
 			statusText(tr("Choose a data source first."), "error");
 			return;
 		}
-		if (!state.scanned) {
-			var scanned = await scanDocument();
-			if (!scanned) {
-				return;
-			}
-		}
-		saveSettings(storage(), currentSettings());
+		// The re-entrancy latch is set BEFORE the first await: a rapid
+		// double-click on Merge arrives while the scan below is still pending,
+		// and without the early latch both clicks run interleaved pipelines
+		// over the one document.
 		state.running = true;
 		state.cancelled = false;
 		renderAll();
+		try {
+			if (!state.scanned) {
+				var scanned = await scanDocument();
+				if (!scanned) {
+					return;
+				}
+			}
+			saveSettings(storage(), currentSettings());
 
-		var outcome = await runMergePipeline({
+			var outcome = await runMergePipeline({
 			data: state.source.data,
 			paragraphs: state.paragraphs,
 			matched: state.mapping.matched,
@@ -733,20 +738,24 @@
 			}
 		});
 
-		state.running = false;
-		if (outcome.ok) {
-			statusText(tr("Merge complete."), "ok");
-			// The window closes only after a successful run - errors keep it open.
-			closeWindow();
-		} else if (outcome.cancelled) {
-			statusText(outcome.error);
-			if (state.closeAfterRun) {
+			if (outcome.ok) {
+				statusText(tr("Merge complete."), "ok");
+				// The window closes only after a successful run - errors keep it open.
 				closeWindow();
+			} else if (outcome.cancelled) {
+				statusText(outcome.error);
+				if (state.closeAfterRun) {
+					closeWindow();
+				}
+			} else {
+				statusText(outcome.error, "error");
 			}
-		} else {
-			statusText(outcome.error, "error");
+		} finally {
+			// Reset the latch whatever happened - a throwing pipeline seam must
+			// not leave the wizard stuck on "running".
+			state.running = false;
+			renderAll();
 		}
-		renderAll();
 	}
 
 	/**
@@ -1129,6 +1138,8 @@
 				checkbox.checked = state.plainUnmatched[token] !== false;
 				checkbox.addEventListener("change", function () {
 					state.plainUnmatched[token] = !!checkbox.checked;
+					// The combined-mode warning depends on which fallbacks stay on.
+					renderOutputWarnings();
 				});
 				label.appendChild(checkbox);
 				label.appendChild(document.createTextNode(tr("plain replace")));
@@ -1155,11 +1166,20 @@
 			return;
 		}
 		var warnings = [];
-		if (state.mode === "combined" && !state.wrapMatched && state.mapping.matched.length) {
-			// One combined document holds every record's copy of the template, so
-			// plain replacement cannot vary per copy - see runMergePipeline.
+		// The same plain-token set the pipeline will plain-replace: with
+		// wrapping on, the unmatched tokens still on "plain replace"; with
+		// wrapping off, every token. In a combined document each record's copy
+		// of the template shares one replacement, so these tokens cannot vary
+		// per recipient and are blanked - warn instead of producing silent
+		// blanks (the known limitation of plain replacement in combined mode).
+		var plainTokens = state.wrapMatched
+			? state.mapping.unmatched.filter(function (token) {
+				return state.plainUnmatched[token] !== false;
+			})
+			: state.tokens.slice();
+		if (state.mode === "combined" && plainTokens.length) {
 			warnings.push(
-				tr("Plain replacement in a combined document cannot vary per recipient - matched tokens will be blank. Wrap the tokens or use one file per recipient.")
+				tr("Plain replacement in a combined document cannot vary per recipient - the plain-replaced tokens will be blank. Wrap the tokens or use one file per recipient.")
 			);
 		}
 		view.outputWarn.textContent = warnings.join(" ");

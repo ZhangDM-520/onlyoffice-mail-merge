@@ -137,3 +137,27 @@ test("fieldDisplay renders a merge-field name in guillemets", () => {
 	assert.equal(fieldmap.fieldDisplay("Name"), "«Name»");
 	assert.equal(fieldmap.fieldDisplay(""), "«»");
 });
+
+test("wrapPlan offsets are UTF-16 code units over the same string GetText() returns", () => {
+	// The surgery in commands.js maps offsets onto run boundaries with
+	// elementText().length and Split2(pos) - both code-unit measures - so
+	// astral characters must count as two here, exactly as JS strings do.
+	const text = "🎉 Hi {{Name}}!";
+	assert.equal(text.slice(0, "🎉 Hi ".length), "🎉 Hi ");
+	assert.deepEqual(fieldmap.wrapPlan(text), [
+		{ token: "{{Name}}", name: "Name", start: 6, end: 14 }
+	]);
+	// An astral character inside the name is part of the token, whole.
+	const inner = fieldmap.wrapPlan("x {{Na🎉me}}y")[0];
+	assert.equal(inner.token, "{{Na🎉me}}");
+	assert.equal(inner.name, "Na🎉me");
+	assert.equal(inner.start, 2);
+	assert.equal(inner.end, 12);
+	// The universal property: offsets slice the exact token back out of the
+	// paragraph text.
+	for (const probe of [text, "x {{Na🎉me}}y", "🎉 {{A}} and {{A}}", "{{a}} {{a}}"]) {
+		for (const entry of fieldmap.wrapPlan(probe)) {
+			assert.equal(probe.slice(entry.start, entry.end), entry.token);
+		}
+	}
+});

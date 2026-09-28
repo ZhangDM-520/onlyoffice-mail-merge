@@ -198,7 +198,12 @@ function escapeRegExp(text) {
 
 function replaceAll(text, searchString, replaceString, matchCase) {
 	if (matchCase === false) {
-		return String(text).replace(new RegExp(escapeRegExp(searchString), "gi"), replaceString);
+		// MIRROR(ApiDocument.SearchAndReplace): the replacement is a plain
+		// string, so "$&"-shaped values must stay literal - a replacer function
+		// keeps String.replace from reading them as replacement patterns.
+		return String(text).replace(new RegExp(escapeRegExp(searchString), "gi"), function () {
+			return replaceString;
+		});
 	}
 	return String(text).split(searchString).join(replaceString);
 }

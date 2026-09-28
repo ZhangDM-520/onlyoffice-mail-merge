@@ -44,9 +44,27 @@ Desktop UI (web-apps) exposes none of it — no Mailings tab, nothing in locales
 
 - Install dir must be the braced GUID (`asc.` prefix only in config.json); `cp -a plugin/.`,
   delete dest on upgrade; clear editor `data/cache/{Cache,Code Cache}` after replacing files.
+- **Per-user plugin roots need a real `v1/` loader sibling.** Frames resolve
+  `../v1/plugins.js` relative to their own sdkjs-plugins root; this host's per-user root
+  shipped 3 zero-byte stubs (`plugins.js`, `plugins-ui.js`, `plugins.css`), so a
+  per-user-only plugin enumerates (inotify-proven) but `window.Asc.plugin` is undefined and
+  the UI is silently inert. latex-math escaped this only because its `/opt` copy shadows the
+  user copy. Fixed 2026-09-28 by copying the `/opt` v1 trio into the user root; also install
+  system-wide to match bundled plugins.
 - One callCommand in flight (shared Asc.scope swaps payloads); serialize the queue.
 - Return JSON strings only — `Asc.checkReturnCommand` drops complex objects.
 - Batch document edits into one history point (`CreateNewHistoryPoint`) per merge.
+
+## Search-and-replace semantics (learned from sdk-all.js, 2026-09-28)
+
+- `ApiDocument.SearchAndReplace` replaces **ALL** occurrences per call (`bAll=true`).
+- Its replacement string runs through `CSearchPatternEngine.Set`: `^t ^l ^p ^n ^m ^~ ^? ^# ^$`
+  become field codes and there is **no** `^^` escape; a lone trailing `^` is the only way to
+  insert a literal caret. Our `replacePlain` therefore routes value carets through a
+  private-use marker (`\uE0FF`) and demotes them in one final pass; values already
+  containing the marker are refused (`unsafe-value`).
+- callCommand globals (`window`/`document`/`alert`) are **shadow-stubbed** by
+  `safePluginEval` (bound as no-op params), not deleted or throwing.
 
 ## Decisions
 

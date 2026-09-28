@@ -15,6 +15,10 @@
    `~/.local/share/onlyoffice/desktopeditors/sdkjs-plugins/`, merged by GUID+version;
    directory name = braced GUID; `config.json` guid = `asc.{GUID}`. Upgrade = remove dest
    first (`cp -a` only adds). Clear `data/cache/{Cache,Code Cache}` after file replacement.
+   **Per-user root must have a real `v1/` loader sibling** — frames resolve `../v1/plugins.js`
+   from their own root; this host's user root had zero-byte stubs (plugins enumerate but
+   `Asc.plugin` is undefined → silently inert UI). Keep the `/opt` v1 trio copied into the
+   user root, or install plugins system-wide.
 4. `callCommand` bodies are stringified (no closures); `Asc.scope` is one shared slot
    (serialize dispatch); returns must be JSON strings; `window`/`document`/`alert` are
    blocked inside callCommand since 7.1.

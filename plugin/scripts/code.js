@@ -31,9 +31,11 @@
  * document record by record and restores the snapshot after every save. Errors
  * surface in the status area and the window is NEVER closed on error; Cancel
  * (button id 0) and the X (id -1) close via CloseWindow once the pipeline has
- * unwound. The window id comes from the page URL (`?windowID=...`, the same
- * source the SDK's own plugins.js `q()` reads) because `Asc.plugin.windowID` is
- * only published from an XHR callback and may be missing early.
+ * unwound. The window id arrives WITH the button click (the host shim dispatches
+ * `Asc.plugin.button(k, g.buttonWindowId)`), so the hint is the first close
+ * target; the page URL (`?windowID=...`) and `Asc.plugin.windowID` exist only
+ * for secondary windows created via ShowWindow and are the fallbacks for
+ * hint-less callers.
  */
 (function (window, document) {
 	"use strict";
@@ -74,7 +76,10 @@
 		format: "docx",
 		running: false,
 		cancelled: false,
-		closeAfterRun: false
+		closeAfterRun: false,
+		// The window id that arrived with the button click asking for a close;
+		// kept for the close that only happens after a cancelled run unwinds.
+		closeWindowId: undefined
 	};
 
 	/* ------------------------------------------------------------------ *
@@ -659,8 +664,8 @@
 	// is `executeMethod("CloseWindow", [this.id])`, and that same id is what
 	// ShowWindow appends to the page URL as `?windowID=`. The shim (plugins.js
 	// `q()`) copies the query into `Asc.plugin.windowID` only from its onload
-	// XHR callback, so the URL is the earliest source and the SDK value the
-	// fallback.
+	// XHR callback, so among the re-derived sources the URL is the earliest
+	// and the SDK value the fallback.
 	function queryWindowId() {
 		try {
 			var match = /[?&]windowID=([^&]+)/.exec(window.location.search || "");
@@ -686,11 +691,18 @@
 		return id !== undefined ? id : sdkWindowId();
 	}
 
-	function closeWindow() {
-		var ids = [queryWindowId(), sdkWindowId()];
+	// Close resolution order: the hint that arrived with the button click (the
+	// shim dispatches `Asc.plugin.button(k, g.buttonWindowId)` - the window id
+	// is the SECOND argument, and for a main window-type variation it is the
+	// only id there is), then the URL, then the SDK value, then a bare call.
+	// A throw from any executeMethod walks the chain on; when nothing gets
+	// through, the shim's own default close (`executeCommand("close", "")`) is
+	// the final fallback.
+	function closeWindow(hintId) {
+		var ids = [hintId, queryWindowId(), sdkWindowId()];
 		for (var i = 0; i < ids.length; i++) {
 			// Skip missing ids and a second attempt on the same one.
-			if (ids[i] === undefined || (i > 0 && ids[i] === ids[0])) {
+			if (ids[i] === undefined || ids[i] === null || ids[i] === "" || (i > 0 && ids.indexOf(ids[i]) !== i)) {
 				continue;
 			}
 			try {
@@ -700,12 +712,20 @@
 				console.error("[mail-merge] CloseWindow failed", e);
 			}
 		}
-		// No usable id (or both id attempts threw): the bare call is the last
+		// No usable id (or every id attempt threw): the bare call is the next
 		// resort so the host still gets a chance to close the window.
 		try {
 			window.Asc.plugin.executeMethod("CloseWindow", []);
+			return;
 		} catch (e) {
 			console.error("[mail-merge] CloseWindow failed", e);
+		}
+		// Final fallback: the shim's default close for a button press the
+		// plugin does not consume - some hosts honour only this channel.
+		try {
+			window.Asc.plugin.executeCommand("close", "");
+		} catch (e) {
+			console.error("[mail-merge] executeCommand close failed", e);
 		}
 	}
 
@@ -769,20 +789,24 @@
 
 			if (outcome.ok) {
 				statusText(tr("Merge complete."), "ok");
-				// The window closes only after a successful run - errors keep it open.
-				closeWindow();
+				// The window closes only after a successful run - errors keep it
+				// open. The close carries the window id that arrived with the
+				// click that started (or cancelled) the run.
+				closeWindow(state.closeWindowId);
 			} else if (outcome.cancelled) {
 				statusText(outcome.error);
 				if (state.closeAfterRun) {
-					closeWindow();
+					closeWindow(state.closeWindowId);
 				}
 			} else {
 				statusText(outcome.error, "error");
 			}
 		} finally {
 			// Reset the latch whatever happened - a throwing pipeline seam must
-			// not leave the wizard stuck on "running".
+			// not leave the wizard stuck on "running". The captured close hint
+			// is single-run state too.
 			state.running = false;
+			state.closeWindowId = undefined;
 			renderAll();
 		}
 	}
@@ -790,27 +814,34 @@
 	/**
 	 * The dialog footer arrives here as ids into config.json's buttons array:
 	 * 0 = Cancel, 1 = Merge, -1 = the X. MANDATORY hook - without it the host's
-	 * injected router throws on the X and nothing closes at all.
+	 * injected router throws on the X and nothing closes at all. The window id
+	 * arrives with the click (`button(k, g.buttonWindowId)` in the shim's
+	 * router) and is threaded through to closeWindow - re-deriving it later
+	 * finds nothing for a main window-type variation.
 	 */
-	function handleButton(id) {
+	function handleButton(id, windowId) {
 		var numeric = typeof id === "string" ? parseInt(id, 10) : id;
 		if (isNaN(numeric)) {
 			return;
 		}
 		if (state.running) {
-			// Cancel while merging: stop at the next stage boundary, then close.
+			// Cancel while merging: stop at the next stage boundary, then close
+			// with THIS click's window id once the pipeline has unwound.
 			if (numeric === -1 || numeric === 0) {
 				state.cancelled = true;
 				state.closeAfterRun = true;
+				state.closeWindowId = windowId;
 				statusText(tr("Cancelling..."));
 			}
 			return;
 		}
 		if (numeric === -1 || numeric === 0) {
-			closeWindow();
+			closeWindow(windowId);
 			return;
 		}
 		if (numeric === 1) {
+			// The success-close after the run carries the same click's id.
+			state.closeWindowId = windowId;
 			return startMerge();
 		}
 		return undefined;

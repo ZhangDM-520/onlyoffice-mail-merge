@@ -517,6 +517,67 @@ test("getWindowId: falls back to the SDK value when the URL has none", () => {
 	assert.strictEqual(h.ui.getWindowId(), "sdk-id");
 });
 
+test("close: the windowId hint that arrives with the click wins over the URL and SDK ids", () => {
+	const h = boot(); // URL ?windowID=win-42, SDK windowID sdk-id
+	// The host dispatches the id as the button hook's second argument
+	// (`Asc.plugin.button(k, g.buttonWindowId)`); the direct seam is the same
+	// path hostButton forwards to.
+	h.win.Asc.plugin.button(0, "win-9");
+	h.ui.handleButton(-1, "win-9");
+	const closes = h.log.filter(function (entry) {
+		return entry.name === "CloseWindow";
+	});
+	assert.strictEqual(closes.length, 2, "both ids close");
+	assert.deepStrictEqual(closes[0].args, ["win-9"], "the hint beats the page URL's windowID");
+	assert.deepStrictEqual(closes[1].args, ["win-9"], "the hint beats the SDK-published windowID");
+});
+
+test("close: no id anywhere falls through to bare CloseWindow and executeCommand('close')", () => {
+	const calls = [];
+	const swallow = function () {};
+
+	const h = boot({ search: "" });
+	delete h.win.Asc.plugin.windowID;
+	h.win.Asc.plugin.executeMethod = function (name, args) {
+		calls.push(["executeMethod", name, args]);
+		throw new Error("host refused the bare close");
+	};
+	h.win.Asc.plugin.executeCommand = function (command, param) {
+		calls.push(["executeCommand", command, param]);
+	};
+	const original = console.error;
+	console.error = swallow;
+	try {
+		h.ui.handleButton(-1);
+	} finally {
+		console.error = original;
+	}
+	assert.deepStrictEqual(
+		calls,
+		[
+			["executeMethod", "CloseWindow", []],
+			["executeCommand", "close", ""]
+		],
+		"bare CloseWindow first, then the shim's own default close"
+	);
+
+	// executeMethod missing entirely must reach the same final fallback.
+	const bare = boot({ search: "" });
+	delete bare.win.Asc.plugin.windowID;
+	delete bare.win.Asc.plugin.executeMethod;
+	const bareCalls = [];
+	bare.win.Asc.plugin.executeCommand = function (command, param) {
+		bareCalls.push([command, param]);
+	};
+	console.error = swallow;
+	try {
+		bare.ui.handleButton(-1);
+	} finally {
+		console.error = original;
+	}
+	assert.deepStrictEqual(bareCalls, [["close", ""]], "an unavailable executeMethod still closes via executeCommand");
+});
+
 /* ------------------------------------------------------------------ *
  * Pipeline sequencing
  * ------------------------------------------------------------------ */
@@ -720,6 +781,25 @@ test("handleButton(0) while running flags a cancel and closes after the unwind",
 	assert.strictEqual(h.ui.state.cancelled, true);
 	assert.strictEqual(h.ui.state.closeAfterRun, true);
 	assert.ok(!h.names().includes("CloseWindow"), "the window closes only once the pipeline has unwound");
+});
+
+test("a cancel while running closes later with the windowId captured from the click", async () => {
+	const h = boot();
+	h.ui.loadSourceText("recipients.csv", "raw");
+	await h.ui.scanDocument();
+	const run = h.ui.handleButton(1);
+	h.ui.handleButton(0, "win-9");
+	assert.strictEqual(h.ui.state.cancelled, true);
+	assert.strictEqual(h.ui.state.closeAfterRun, true);
+	assert.strictEqual(h.ui.state.closeWindowId, "win-9", "the cancel click's hint is captured");
+	assert.ok(!h.names().includes("CloseWindow"), "the window closes only once the pipeline has unwound");
+
+	await run;
+	const closes = h.log.filter(function (entry) {
+		return entry.name === "CloseWindow";
+	});
+	assert.strictEqual(closes.length, 1, "the unwind closes exactly once");
+	assert.deepStrictEqual(closes[0].args, ["win-9"], "the deferred close uses the captured hint, not a re-derived id");
 });
 
 test("wrapping off replaces every token as plain text", async () => {
